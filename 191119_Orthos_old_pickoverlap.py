@@ -7,6 +7,9 @@ import scipy.stats
 import scipy.optimize
 import glob
 import itertools
+from matplotlib import cm
+import math
+import copy
 
 def read_tree(treefile, silent=True):
     """Takes a phylogenetic tree file
@@ -237,30 +240,24 @@ def find_orthologs(tree, data_dic, tip_dic, duplication_list):
     return ortho_dic
 
 
-def pick_nonoverlap(tree, pairs, tip_dic):
+def pick_nonoverlap(pairs):
     """finds a set of proteins from the same tree that do not share any branches on the tree and records their
     interaction scores and branch length the algorithm takes a random pair, records values, and removes those that
      overlap with it, then takes a new pair
     Takes:
-        tree: a tree object
-        pairs: a dictionary of frozensets of protein pairs on the tree to lists of two numerics,
-               in the form of key = frozenset({'173', '174'}), values = [total distance between the two proteins in
-               the key,  whether they interact]
-        tip_dic: tip_dic: dictionary of strings to strings to convert names from lowercase in the data_dic to
-                mixedcase in the tree
+        pairs: a dictionary of frozensets of protein pairs on the tree to lists of two numerics and a nested list of
+        numerics, in the form of key = frozenset({'173', '174'}), values = [total distance between the two proteins in
+        the key,  whether they interact, [trace of clade objects between the two proteins on a tree]]
+        ie = sample[
     Returns:
         values:
             a list of numerics of whether the proteins interacted or not
         distances:
             a list of numerics of how far apart the proteins were
     """
-    for i in pairs.keys():
-        a = tip_dic[list(i)[0]]
-        b = tip_dic[list(i)[1]]
-        pairs[i].append(Phylo.BaseTree.TreeMixin.trace(tree, a, b) + [a])
-    values = []
-    distances = []
+    values, distances = [], []
     keys = list(pairs.keys())
+
     while len(keys) > 0:
         key = np.random.choice(keys)
         values.append(pairs[key][1])
@@ -329,6 +326,9 @@ def neutral_evo(tree, data_dic, tip_dic, duplication_nodes, samples=20):
         distances_tot.append(dist)
         values_tot.append(val)
         pairs.append(i)
+        a = tip_dic[list(i)[0]]
+        b = tip_dic[list(i)[1]]
+        filtered_orthologs[i].append(Phylo.BaseTree.TreeMixin.trace(tree, a, b) + [a])
 
     for i in range(len(bins)):
         bin_contents.append([])
@@ -349,7 +349,7 @@ def neutral_evo(tree, data_dic, tip_dic, duplication_nodes, samples=20):
             new_dic = {}
             for j in i:
                 new_dic[j] = filtered_orthologs[j]
-            values, distances = pick_nonoverlap(tree, new_dic, tip_dic)
+            values, distances = pick_nonoverlap(new_dic)
             random_val.append(1 - np.mean(values))
             random_dist.append(np.mean(distances))
             random_no.append(len(values))
@@ -440,60 +440,67 @@ def intersection(lst1, lst2):
     lst3 = [value for value in lst1 if value in lst2]
     return lst3
 
-def read_ancestral_seqs(treename, silent=True):
-   '''Legacy code as far as I can tell
-       Takes:
-           treename: a folder containing various tree information
-   '''
-   ancestral_seqs={}
-   altall_seqs={}
-   nodefiles=glob.glob(treename+'/tree1/*.dat') #list of Lazarus node files for that tree
-   pp={}
-   pp_persite=[]
-   ASRtree,tips, nodes=read_tree(treename+'/tree1/tree2') #get tree from Lazarus with reoptimized BLs, currently I have to manually make this file because lazarus formats it stupidly
-   ASRtree=ASRtree.as_phyloxml() # convert to format in which I can edit node labels
-   #print (ASRtree.format('newick'))
-   for i in nodefiles:
-       f=open(i, 'r')
-       lines=f.readlines()
-       nodenumber=i.split('\\')[-1].split('.')[0][4:]
-       ancestral_seqs[nodenumber]=''
-       altall_seqs[nodenumber]=''
-       pp_perfile=[]
-
-       for j in lines:
-           if int(j.split()[0])>25 and int(j.split()[0])<67: #only use bzip domain
-               ancestral_seqs[nodenumber]+=j.split()[1]
-               pp_perfile.append(float(j.split()[2]))
-               try:
-                   if float(j.split()[4])>=0.2:
-                       altall_seqs[nodenumber]+=j.split()[3]
-                   else:
-                       altall_seqs[nodenumber]+=j.split()[1]
-               except IndexError:
-                   altall_seqs[nodenumber]+=j.split()[1]
-       if ancestral_seqs[nodenumber]==altall_seqs[nodenumber]:
-           del altall_seqs[nodenumber]
-       pp[nodenumber]=np.average(pp_perfile)
-       pp_persite.append(pp_perfile)
-
-   if silent==False:
-       print ('There are '+str(len(set(ancestral_seqs.values())))+' unique ML sequences and '+ str(len(altall_seqs))+' altall sequences on '+ treename)
-       plt.figure()
-       plt.imshow(np.array([x for _,x in sorted(zip(pp,pp_persite))]))
-       plt.show()
-
-
-   f=open(treename+'/tree1/Ancestral_seqs.fasta','w')
-   for i in ancestral_seqs.keys():
-       f.writelines('>'+i+'\n')
-       f.writelines(ancestral_seqs[i]+'\n')
-   f.close()
-
-   return [ancestral_seqs,altall_seqs,pp]
+# def read_ancestral_seqs(treename, silent=True):
+#    '''Legacy code as far as I can tell
+#        Takes:
+#            treename: a folder containing various tree information
+#    '''
+#    ancestral_seqs={}
+#    altall_seqs={}
+#    nodefiles=glob.glob(treename+'/tree1/*.dat') #list of Lazarus node files for that tree
+#    pp={}
+#    pp_persite=[]
+#    ASRtree,tips, nodes=read_tree(treename+'/tree1/tree2') #get tree from Lazarus with reoptimized BLs, currently I have to manually make this file because lazarus formats it stupidly
+#    ASRtree=ASRtree.as_phyloxml() # convert to format in which I can edit node labels
+#    #print (ASRtree.format('newick'))
+#    for i in nodefiles:
+#        f=open(i, 'r')
+#        lines=f.readlines()
+#        nodenumber=i.split('\\')[-1].split('.')[0][4:]
+#        ancestral_seqs[nodenumber]=''
+#        altall_seqs[nodenumber]=''
+#        pp_perfile=[]
+#
+#        for j in lines:
+#            if int(j.split()[0])>25 and int(j.split()[0])<67: #only use bzip domain
+#                ancestral_seqs[nodenumber]+=j.split()[1]
+#                pp_perfile.append(float(j.split()[2]))
+#                try:
+#                    if float(j.split()[4])>=0.2:
+#                        altall_seqs[nodenumber]+=j.split()[3]
+#                    else:
+#                        altall_seqs[nodenumber]+=j.split()[1]
+#                except IndexError:
+#                    altall_seqs[nodenumber]+=j.split()[1]
+#        if ancestral_seqs[nodenumber]==altall_seqs[nodenumber]:
+#            del altall_seqs[nodenumber]
+#        pp[nodenumber]=np.average(pp_perfile)
+#        pp_persite.append(pp_perfile)
+#
+#    if silent==False:
+#        print ('There are '+str(len(set(ancestral_seqs.values())))+' unique ML sequences and '+ str(len(altall_seqs))+' altall sequences on '+ treename)
+#        plt.figure()
+#        plt.imshow(np.array([x for _,x in sorted(zip(pp,pp_persite))]))
+#        plt.show()
+#
+#
+#    f=open(treename+'/tree1/Ancestral_seqs.fasta','w')
+#    for i in ancestral_seqs.keys():
+#        f.writelines('>'+i+'\n')
+#        f.writelines(ancestral_seqs[i]+'\n')
+#    f.close()
+#
+#    return [ancestral_seqs,altall_seqs,pp]
 
 
 def get_species(tips):
+    """
+    Figures out what species we have in our tree. Should possibly convert to tip_dic
+    Takes:
+        tips: list of tips from clades
+    Returns:
+         species_dic: a dictionary of species names of the form key = species name, values = list of proteins from that species
+    """
     species_dic = {}
     clades = ['VBP', 'HLF_insects', 'HLF_', 'HLF', 'TEF', 'E4BP4', 'DBP', 'PAR', 'Par1', 'Par2', 'New', 'Weird']
     #A = str(tips[1])
@@ -523,24 +530,30 @@ def get_species(tips):
     return species_dic
 
 
-def find_matched_ancestors(species_dic, tree, duplication_nodes, nodes):
-    ''' Finds all pairs of time matched ancestors and pairs of extant paralogs within the same species. '''
-
-    species_tree, species_tips, species_nodes = read_tree(
-        '../speciestree_node_names.newick.nwk')  # contains species relationships
+def find_matched_ancestors(species_dic,species_nodes,species_tree, tree, duplication_nodes, nodes):
+    ''' Finds all pairs of time matched ancestors and pairs of extant paralogs within the same species.
+    Takes:
+        species_dic: a dictionary of species and their proteins in the form key = species, value = list of proteins from that species
+        species_nodes: list of clade objects that are nodes from the species tree
+        species_tree: a tree object containing the species relationships
+        tree: a tree object containing the protein interacitons
+        duplication nodes: a list containing clades where duplications happened
+        nodes: a list of clade objects from tree that correspond to the nodes
+    Returns:
+        matched_ancestors: a list of frozensets containing ancestral nodes
+    '''
     speciation_dic = {}  # this is a dictionary where the key is the node on the species tree and the items are all nodes on my gene tree that correspond to it.
-    LCAs = []
+    matched_ancestors, matched_extant, LCAs = [], [], []
+    matched_dic, age_dic = {}, {}
     total = 0
-    matched_ancestors = []
     tiplen = Phylo.BaseTree.TreeMixin.count_terminals(tree) + 1
+
     # pick one species
     species_combs = list(itertools.combinations(species_dic.keys(), 2))
     ASRtree1 = tree.as_phyloxml()  # We l eventually have a tree in which each node is labelled '1' if it's part of a time matched comparison and '0' if it's not.
     for i in ASRtree1.find_clades():  # Set all the node labels of our new tree to 0
         if i.is_terminal() == False:
             i._set_confidence(0)
-    matched_dic = {}
-    matched_extant = []
     for i in species_dic.keys():
         matched_dic[i] = []
         combs = list(itertools.combinations(species_dic[i], 2))
@@ -548,46 +561,31 @@ def find_matched_ancestors(species_dic, tree, duplication_nodes, nodes):
             matched_extant.append(j)
             matched_dic[i].append(frozenset([j[0], j[1]]))
     for i in species_combs:
-
         combs = [(x, y) for x in species_dic[i[0]] for y in species_dic[i[1]]]  # pick two species
-
         for k in combs:  # go throug the combinations of their extant sequnces (one from each of the two)
             ancestor = Phylo.BaseTree.TreeMixin.common_ancestor(tree, [k[0], k[1]])  # get the ancestor
-
             if ancestor not in duplication_nodes and ancestor not in LCAs:
-
                 try:
-                    speciationnode = Phylo.BaseTree.TreeMixin.common_ancestor(species_tree,
-                                                                              [i[0], i[1]])  # get the speciation node
-
+                    speciationnode = Phylo.BaseTree.TreeMixin.common_ancestor(species_tree,[i[0], i[1]])  # get the speciation node
                     try:
-                        speciation_dic[str(species_nodes.index(speciationnode))].append(
-                            k)  # You have a speciation node, associate with it the particular ancestor
+                        speciation_dic[str(species_nodes.index(speciationnode))].append(k)  # You have a speciation node, associate with it the particular ancestor
                     except KeyError:
-                        speciation_dic[str(species_nodes.index(speciationnode))] = [
-                            k]  # You have a speciation node, associate with it the particular ancestor
+                        speciation_dic[str(species_nodes.index(speciationnode))] = [k]  # You have a speciation node, associate with it the particular ancestor
                     LCAs.append(ancestor)
                 except ValueError:
                     print('one of the species is not on the tree', i)
-    age_dic = {}
     for i in speciation_dic.keys():  # Now go through the speciation dictm and  for each entry, make all pairwise combinations (each part of a pair is two sequences that define a LCA)
-
         pairwise_combs = list(itertools.combinations(speciation_dic[i], 2))
         matched_dic[str(int(i) + 53)] = []
         age_dic[i] = Phylo.BaseTree.TreeMixin.distance(species_tree, species_nodes[int(i)], species_nodes[0])
         if len(speciation_dic[i]) == 1:
-            node1 = str(nodes.index(Phylo.BaseTree.TreeMixin.common_ancestor(tree, [speciation_dic[i][0][0],
-                                                                                    speciation_dic[i][0][
-                                                                                        1]])) + tiplen)  # Now I fucking get the problem. For nodes I don't have I don't correct the numbers. If they are small enough they stay
+            node1 = str(nodes.index(Phylo.BaseTree.TreeMixin.common_ancestor(tree, [speciation_dic[i][0][0], speciation_dic[i][0][1]])) + tiplen)  # Now I fucking get the problem. For nodes I don't have I don't correct the numbers. If they are small enough they stay
             matched_dic[str(int(i) + 53)].append(frozenset([node1]))
         for j in pairwise_combs:
-            Phylo.BaseTree.TreeMixin.common_ancestor(ASRtree1, [j[0][0], j[0][1]])._set_confidence(
-                1)  # Node labels are set to 1 if this node is part of any time-macthed comparison
+            Phylo.BaseTree.TreeMixin.common_ancestor(ASRtree1, [j[0][0], j[0][1]])._set_confidence(1)  # Node labels are set to 1 if this node is part of any time-macthed comparison
             Phylo.BaseTree.TreeMixin.common_ancestor(ASRtree1, [j[1][0], j[1][1]])._set_confidence(1)
-            node1 = str(nodes.index(Phylo.BaseTree.TreeMixin.common_ancestor(tree, [j[0][0], j[0][
-                1]])) + tiplen)  # Get the node correspnding to the first pair of sequences
-            node2 = str(nodes.index(Phylo.BaseTree.TreeMixin.common_ancestor(tree, [j[1][0], j[1][
-                1]])) + tiplen)  # Get the node correspnding to the second pair of sequences
+            node1 = str(nodes.index(Phylo.BaseTree.TreeMixin.common_ancestor(tree, [j[0][0], j[0][1]])) + tiplen)  # Get the node correspnding to the first pair of sequences
+            node2 = str(nodes.index(Phylo.BaseTree.TreeMixin.common_ancestor(tree, [j[1][0], j[1][1]])) + tiplen)  # Get the node correspnding to the second pair of sequences
             matched_ancestors.append(frozenset([node1, node2]))
             matched_dic[str(int(i) + 53)].append(frozenset([node1, node2]))
         total += len(pairwise_combs)
@@ -595,10 +593,6 @@ def find_matched_ancestors(species_dic, tree, duplication_nodes, nodes):
     print('There are ' + str(total) + ' time-matched pairs of ancestors on this tree')
     print('There are ' + str(len(matched_extant)) + ' extant paralog pairs on this tree')
 
-    f = open('../MLtree/tree1/time-matched_nodes.newick', 'w')
-    f.writelines(
-        ASRtree1.format('newick').replace('):', ')'))  # stupid trick so the tree is formatted right for fig tree
-    f.close()
     return matched_ancestors, matched_extant, matched_dic, age_dic
 
 
@@ -651,19 +645,10 @@ def read_partial_ortholog_file(tree, nodes, data_dic):
     f = open('Partial_orthologs.txt', 'r')
     lines = f.readlines()
     partial_ortholo_dic = {}
-    yes = []
-    no = []
-    distances = []
-    values = []
-    done = set([])
     for i in lines:
         line = i.split()
-        trace1 = trace = Phylo.BaseTree.TreeMixin.trace(tree, nodes[(int(line[4].split(',')[1]) - 172)],
-                                                        line[4].split(',')[
-                                                            0])  # I'm not adding the start node here to the trace for a reason here, because it can be in multiple comparisons without a problem. We care about branches, not nodes, so this is fine
-        trace2 = trace = Phylo.BaseTree.TreeMixin.trace(tree, nodes[(int(line[5].split(',')[1]) - 172)],
-                                                        line[5].split(',')[0])
-        # The try statments below add two interactions per pair that we get by matching a protein to its mismatched ancestor. I will have to explain this in a figure......
+        trace1 = trace = Phylo.BaseTree.TreeMixin.trace(tree, nodes[(int(line[4].split(',')[1]) - 172)],line[4].split(',')[0])  # I'm not adding the start node here to the trace for a reason here, because it can be in multiple comparisons without a problem. We care about branches, not nodes, so this is fine
+        trace2 = trace = Phylo.BaseTree.TreeMixin.trace(tree, nodes[(int(line[5].split(',')[1]) - 172)],line[5].split(',')[0]) # The try statments below add two interactions per pair that we get by matching a protein to its mismatched ancestor. I will have to explain this in a figure......
         try:
             distance = Phylo.BaseTree.TreeMixin.distance(tree, nodes[(int(line[4].split(',')[1]) - 172)],
                                                          line[4].split(',')[0])
@@ -684,8 +669,7 @@ def read_partial_ortholog_file(tree, nodes, data_dic):
     f.close()
     bins = (0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.5, 2, 2.5, 3, 3.5)
 
-    distances = []
-    values = []
+
     distances_tot = []
     values_tot = []
     pairs = []
@@ -723,7 +707,8 @@ def read_partial_ortholog_file(tree, nodes, data_dic):
             new_dic = {}
             for j in i:
                 new_dic[j] = partial_ortholo_dic[j]
-            distances, values = randomly_sample_partial_orthologs(new_dic)
+            #distances, values = randomly_sample_partial_orthologs(new_dic)
+            values, distances = pick_nonoverlap(new_dic)
             random_val.append(np.mean(values))
             random_dist.append(np.mean(distances))
             random_no.append(len(values))
@@ -755,23 +740,6 @@ def read_partial_ortholog_file(tree, nodes, data_dic):
     plt.show()
     return partial_ortholo_dic
 
-def randomly_sample_partial_orthologs(partial_ortholo_dic):
-    keys=partial_ortholo_dic.keys()
-    distances=[]
-    values=[]
-    done=set([])
-    while len(keys)>0:
-        key=np.random.choice(keys)
-        distances.append(partial_ortholo_dic[key][0])
-        values.append(partial_ortholo_dic[key][1])
-        for j in keys:
-            if j!=key :
-                if  j in partial_ortholo_dic.keys()and  key in partial_ortholo_dic.keys():
-                    if  len(intersection(partial_ortholo_dic[key][2],partial_ortholo_dic[j][2]))>0:
-                        del partial_ortholo_dic[j] # Delete all tratces that overlap with it
-        del partial_ortholo_dic[key]
-        keys=partial_ortholo_dic.keys()
-    return distances, values
 
 
 def find_ancestral_pair(tree, pair1, pair2, nodes):
@@ -837,15 +805,361 @@ def find_ancestral_pair(tree, pair1, pair2, nodes):
 def run_partial_orthologs(tree, tips, data_dic, duplication_nodes, nodes, find_partials=False):
     #duplication_nodes = find_duplication_nodes(tree, '../Gene_duplications.txt') # georg's most recent version of this takes more parameters
     #ancestral_seqs, altall_seqs, pp = read_ancestral_seqs('../MLtree')
-    species_dic = get_species(tips)
-    matched_ancestors, matched_extant, matched_dic, age_dic = find_matched_ancestors(species_dic, tree,
-                                                                                     duplication_nodes, nodes)
+    species_dic = get_species(tips) #functional although perhaps should use tip_dic like everything else
+    species_tree, species_tips, species_nodes = read_tree('../speciestree_node_names.newick.nwk')
+    matched_ancestors, matched_extant, matched_dic, age_dic = find_matched_ancestors(species_dic,species_nodes,species_tree, mytree, myduplication_nodes, mynodes)
     if find_partials == True:  # Only do this if you have to, the calc is slow
-        find_partial_orthologs(data_dic, matched_ancestors,
-                               matched_extant)  # find partial orthologs and write partial ortholog file
+        find_partial_orthologs(data_dic, matched_ancestors, matched_extant)  # find partial orthologs and write partial ortholog file
 
-    read_partial_ortholog_file()
+    read_partial_ortholog_file(tree, nodes, data_dic)
+##################################################################################################################
+#
+# Code specific for paralog tree here
+#
+##################################################################################################################
+def find_xy_max(coordinates):
+    'finds the dimensions of the tree for plotting circles'''
+    xs=[coordinates[i][0] for i in coordinates.keys()]
+    ys=[coordinates[i][1] for i in coordinates.keys()]
+    return [max(xs),abs(min(ys))]
 
+def make_resolve_dic():
+    tree1, tips1, nodes1=read_tree('../MLtree/tree1/tree2')
+    tree, tips, nodes=read_tree('../gene_tree_names.txt')
+    resolve_dic={}
+    for c,i in enumerate(tips1):
+        resolve_dic[str(tips[c])]=str(i)
+    return resolve_dic
+
+def make_inverse_resolve_dic():
+    tree1, tips1, nodes1=read_tree('../MLtree/tree1/tree2')
+    tree, tips, nodes=read_tree('../gene_tree_names.txt')
+    inverse_resolve_dic={}
+    for c,i in enumerate(tips1):
+        inverse_resolve_dic[str(i)]=str(tips[c])
+    return inverse_resolve_dic
+
+
+def match_nodes(resolve_dic):
+    tree1, tips1, nodes1 = read_tree('../MLtree/tree1/tree2')
+    tree, tips, nodes = read_tree('../gene_tree_names_resolve.txt.nwk')
+    tiplen = len(tips) + 1
+    node_dict = {}
+    realtips = set([])
+    for i in tips1:
+        realtips.add(str(i))
+
+    for i in nodes1:
+        tips1 = Phylo.BaseTree.TreeMixin.get_terminals(i)
+        set1 = set([])
+        for j in tips1:
+            set1.add(str(j))
+        for j in nodes:
+            tips2 = Phylo.BaseTree.TreeMixin.get_terminals(j)
+            set2 = set([])
+            for k in tips2:
+                try:
+                    set2.add(resolve_dic[str(k)])
+                except KeyError:
+                    set2.add(str(k))
+
+            if set1 & set2 == set1 and (set2 - set1) & realtips == set([]):
+                if str(nodes1.index(i) + 172) not in node_dict.values():
+                    node_dict[str(nodes.index(j) + tiplen)] = str(nodes1.index(i) + 172)
+                    #forgive us our sins lord
+                elif Phylo.BaseTree.TreeMixin.count_terminals(j) < Phylo.BaseTree.TreeMixin.count_terminals(
+                        nodes[int(list(node_dict.keys())[list(node_dict.values()).index(str(nodes1.index(i) + 172))]) - tiplen]):
+                    del node_dict[list(node_dict.keys())[list(node_dict.values()).index(str(nodes1.index(i) + 172))]]
+                    node_dict[str(nodes.index(j) + tiplen)] = str(nodes1.index(i) + 172)
+    print(len(nodes), len(nodes1), len(node_dict))  # This is odd. I have 230 nodes in the resolution tree and 170 on the normal one. How can the dictionary have 202 entries? Some nodes get matched to two nodes. This fucks up if the earliest branching node is a loss node!
+    return node_dict
+
+
+def get_species_tip_coordinates(tree, nodes, tips):
+    #atree = copy.deepcopy(tree2)
+    #mybool = atree == tree2
+    tree, tips, nodes = read_tree('../speciestree_node_names.newick.nwk')
+    excluded_tips = set([])
+    coor = {}
+    corr_for_real = {}
+    for c, i in enumerate(tips):
+        coor[str(i)] = [Phylo.BaseTree.TreeMixin.distance(tree, nodes[0], i), c * -1]
+        corr_for_real[str(i)] = [Phylo.BaseTree.TreeMixin.distance(tree, nodes[0], i), c * -1]
+    while len(tips) > 1:
+        for c, i in enumerate(tips[:-1]):
+            if i not in excluded_tips and tips[c + 1] not in excluded_tips:
+                ancestor = Phylo.BaseTree.TreeMixin.common_ancestor(tree, i, tips[c + 1])
+                if Phylo.BaseTree.TreeMixin.is_preterminal(ancestor):
+                    node_number = str(nodes.index(ancestor) + 53)
+                    dist = Phylo.BaseTree.TreeMixin.distance(tree, i, ancestor)
+                    coor[node_number] = [coor[str(i)][0] - dist, np.mean([coor[str(i)][1], coor[str(tips[c + 1])][1]])]
+                    corr_for_real[node_number] = [coor[str(i)][0] - dist, np.mean([coor[str(i)][1], coor[str(tips[c + 1])][1]])]
+                    dist = Phylo.BaseTree.TreeMixin.distance(tree, i, ancestor)
+                    Phylo.BaseTree.TreeMixin.prune(tree, i)
+                    excluded_tips.add(i)
+                    coor[str(tips[c + 1])] = [coor[str(tips[c + 1])][0], coor[node_number][1]]
+        tips = Phylo.BaseTree.TreeMixin.get_terminals(tree)
+    plt.show()
+    return corr_for_real
+
+def sort_out_resolved_nodes_and_species(matched_dic):
+    '''This sorts out the species names from the tree resolution and assocaites names from the resolved tree with nodes from the unresolved tree.'''
+    resolve_dic=make_resolve_dic()
+    node_dict=match_nodes(resolve_dic)
+    mapping={}
+    for i in matched_dic.keys():
+        for c,j in enumerate(matched_dic[i]):
+            listi=list(j)
+            for d,k in enumerate(listi):
+                if k in resolve_dic.keys():
+                    listi[d]=resolve_dic[k]
+                    mapping[resolve_dic[k]]=k
+                elif  k in node_dict.keys():
+                    listi[d]=node_dict[k]
+                    mapping[node_dict[k]]=k
+                elif k.isdigit(): # This i have to do in order to correct for nodes absent from the nomral tree but low enough in number that they are on the other tree.
+                    listi[d]=listi[d]+'n'
+            matched_dic[i][c]=frozenset(listi)
+    print("here's where we allow break points to let us think about the choices we made")
+    return matched_dic,mapping
+
+
+def match_order(old_order, new_interactions, tree, tips, nodes, duplication_nodes, mapping):
+    # The problem is that in the dictionary the node numbers are according to the normal tree, but I need to use the resolution tree. So I need that inverted dictionary
+    new_set = set([])
+    inverse_resolve_dic = make_inverse_resolve_dic()
+
+    new_order = []
+    tipno = len(Phylo.BaseTree.TreeMixin.get_terminals(tree)) + 1
+    for i in new_interactions:
+        new_set.update(list(i))
+    print(old_order, list(new_set))
+    for i in old_order:
+        for j in list(new_set):
+            species_loss = False
+            if i.isdigit() and i in mapping.keys():
+                node1 = nodes[int(mapping[i]) - tipno]
+            elif i[:-1].isdigit:
+                node1 = nodes[int(i[:-1]) - tipno]
+            if j.isdigit() and j in mapping.keys():
+                node2 = nodes[int(mapping[j]) - tipno]
+            elif j[:-1].isdigit():
+                node2 = nodes[int(j[:-1]) - tipno]
+            elif j in mapping.keys():
+                node2 = mapping[j]
+            else:
+                species_loss = True
+            if species_loss == False and Phylo.BaseTree.TreeMixin.common_ancestor(tree, [node1,
+                                                                                         node2]) not in duplication_nodes:  # If they are orthologs This is wrong because 172 is not the right number for the root
+                new_order.append(j)
+
+    # #this whole loop of cinditionals is necessary justto deal with the bullshit names
+    #                 try:
+    #                     if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(mapping[i])-tipno],nodes[int(mapping[j])-tipno]]) not in duplication_nodes: # If they are orthologs This is wrong because 172 is not the right number for the root
+    #                         new_order.append(j)
+    #                 except ValueError:
+    #                         if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(mapping[i])-tipno],mapping[j]]) not in duplication_nodes: # If they are orthologs This is wrong because 172 is not the right number for the root
+    #                             new_order.append(j)
+    #
+    #                 except KeyError:
+    #                     try:
+    #                         if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(i[:-1])-tipno],nodes[int(mapping[j])-tipno]]) not in duplication_nodes:
+    #                             new_order.append(j)
+    #
+    #                     except ValueError:
+    #                         if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(mapping[i])-tipno],mapping[j]]) not in duplication_nodes: # If they are orthologs This is wrong because 172 is not the right number for the root
+    #                             new_order.append(j)
+    #                     except KeyError:
+    #                         try:
+    #                             if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(mapping[i])-tipno],nodes[int(j[:-1])-tipno]]) not in duplication_nodes:
+    #                                 new_order.append(j)
+    #
+    #                         except ValueError:
+    #                             if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(mapping[i])-tipno],j]) not in duplication_nodes: # If they are orthologs This is wrong because 172 is not the right number for the root
+    #                                 new_order.append(j)
+    #                         except KeyError:
+    #                             if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(i[:-1])-tipno],nodes[int(j[:-1])-tipno]]) not in duplication_nodes:
+    #                                 new_order.append(j)
+
+    if len(new_order) != len(new_set):
+        print('shit')
+    return new_order
+
+
+def circle(node, matched_dic, coor, size, stretch, ax, order, data_dic):
+    stretch = 0.4
+    ext_x, ext_y = size
+    scale = 0.018
+    x, y = coor
+    node_set = set([])
+    for i in matched_dic[node]:
+        for j in list(i):
+            if 'LOST' in j and j.split('*')[0] != node:  #
+                node_set.add(j)
+            elif 'LOST' not in j:
+                node_set.add(j)
+    # node_list=list(node_set)
+    if len(order) > 1:
+        node_list = order
+    else:
+        node_list = list(node_set)
+    if len(node_list) > 0:
+        angle = 360.0 / len(node_list)
+        xs = [np.cos(math.radians(i * angle)) * scale * ext_x + x for i in range(len(node_list))]
+        ys = [np.sin(math.radians(i * angle)) * scale * ext_y * stretch + y for i in range(len(node_list))]
+        cols = []
+        for i in node_list:
+            try:
+                if data_dic[frozenset([i.lower()])] == 1:
+                    cols.append(cm.cool(1.0))
+                elif data_dic[frozenset([i.lower()])] == 0:
+                    cols.append(cm.cool(0.0))
+                else:
+                    cols.append(cm.Blues(1.0))
+
+            except KeyError:
+                cols.append(cm.Greys(0.5))
+                print(i)
+        done = set([])
+        for c, i in enumerate(xs):
+            for d, j in enumerate(xs):
+                if c != d and frozenset([c, d]) not in done:
+                    try:
+                        if data_dic[frozenset([node_list[c].lower(), node_list[d].lower()])] == 1.0:
+                            ax.plot([i, j], [ys[c], ys[d]], color=cm.cool(1.0), zorder=1)
+                        elif data_dic[frozenset([node_list[c].lower(), node_list[d].lower()])] == 0.5:
+                            ax.plot([i, j], [ys[c], ys[d]], color='blue', zorder=1)
+                        elif data_dic[frozenset([node_list[c].lower(), node_list[d].lower()])] == 0.0:
+                            ax.plot([i, j], [ys[c], ys[d]], color=cm.cool(0.0), zorder=1)
+                    except KeyError:
+                        # ax.plot([i,j],[ys[c],ys[d]], color='grey',zorder=1, linestyle=':')
+                        a = 1
+                    done.add(frozenset([c, d]))
+        ax.scatter(xs, ys, color=cols, s=3, zorder=10, edgecolors='black')
+        xleft, xright = ax.get_xlim()
+        ybottom, ytop = ax.get_ylim()
+        ratio = 2.5
+        ax.set_aspect(abs((xright - xleft) / (ybottom - ytop)) * ratio)
+        ax.set_axis_off()
+
+def plot_species_interactions(species_coordinates, matched_dic, ax, species_tree, species_nodes, tree, tips, nodes, mapping, data_dic):
+    ext_x, ext_y = find_xy_max(species_coordinates)
+    inverse_resolve_dic = make_inverse_resolve_dic()
+
+    #duplication_nodes = find_duplication_nodes(tree, '../Gene_duplications.txt', 0, True, inverse_resolve_dic)
+    #duplication_nodes = find_duplication_nodes(tree, '../Gene_duplications.txt', 0, True, inverse_resolve_dic)
+    duplication_nodes = find_duplication_nodes(tree, '../Gene_duplications.txt')
+    order_dic = {}  # this is used to keep track of the orientation of the dots across node in the interactogram
+    # First let's find the LCA of metazoa
+    ancestor = Phylo.BaseTree.TreeMixin.common_ancestor(species_tree, ['Drosophila_melanogaster', 'Actinia_tenebrosa'])
+    deepest = str(species_nodes.index(ancestor) + 53)
+    deepest_set = set()
+    for i in matched_dic[deepest]:
+        deepest_set.update(list(i))
+    order_dic[deepest] = list(deepest_set)  # Now we have a fixed order at the deppest node.
+    descendants = Phylo.BaseTree.TreeMixin.get_terminals(
+        Phylo.BaseTree.TreeMixin.common_ancestor(species_tree, ['Drosophila_melanogaster', 'Actinia_tenebrosa']))
+    done = set([])
+    for i in descendants:
+        trace = Phylo.BaseTree.TreeMixin.trace(species_tree, ancestor, i)
+        for c, j in enumerate(trace[1:]):
+            if j not in done:
+                try:
+                    order = match_order(order_dic[str(species_nodes.index(trace[c]) + 53)],
+                                        matched_dic[str(species_nodes.index(j) + 53)], tree, tips, nodes,
+                                        duplication_nodes, mapping)
+                except ValueError:
+                    try:
+                        order = match_order(order_dic[str(species_nodes.index(trace[c]) + 53)], matched_dic[str(j)], tree,
+                                        tips, nodes, duplication_nodes, mapping)
+                    except:
+                        print("there is so much failyre", "order_dic ", str(species_nodes.index(trace[c]) + 53), "\nmatched_dic presumably unprintable", "\nc / j: ",c,j)
+                except KeyError:
+                    print("Well that shit didn't work\n", "order_dic ", str(species_nodes.index(trace[c]) + 53), "\nmatched_dic ", str(species_nodes.index(j) + 53), "\nc / j: ",c,j)
+
+                done.add(j)
+                try:
+                    order_dic[str(species_nodes.index(j) + 53)] = order
+                except ValueError:
+                    order_dic[str(j)] = order
+
+    stretch = 1
+    for i in matched_dic.keys():
+        if len(matched_dic[i]) > 0:
+
+            coor = species_coordinates[i]
+            try:
+                circle(i, matched_dic, coor, [ext_x + 1, ext_y + 1], stretch, ax, order_dic[i],data_dic)
+            except KeyError:
+                circle(i, matched_dic, coor, [ext_x + 1, ext_y + 1], stretch, ax, [],data_dic)
+        elif frozenset([i.lower()]) in data_dic.keys():
+
+            coor = species_coordinates[i]
+            #
+            plt.plot(coor[0], coor[1] * stretch, 'o', color=cm.cool(data_dic[frozenset([i.lower()])]), markersize=2,
+                     markeredgecolor='black')
+
+    plt.savefig('species_interactions.eps')
+    return done
+
+
+def draw_species_tree(input_tree, nodes, tips, coordinates, duplication_nodes, ax):
+    """Draws the tree from a list of coordinates and labels the tips
+     Finds each tip and draw a line between them and the parent if the line has ben already drawn
+     """
+    exclude = set([])
+    col = 'black'
+    for i in tips:
+        coordinate1 = coordinates['53']
+        trace = Phylo.BaseTree.TreeMixin.trace(input_tree, nodes[0], i)
+        for j in trace:
+            if j in tips:
+                coordinate2 = coordinates[str(j)]
+                ax.text(coordinate2[0] + 1.5, coordinate2[1] - 0.33, str(j).replace("_"," "), fontsize = 5)
+            else:
+                coordinate2 = coordinates[str(nodes.index(j) + 53)]
+            if frozenset([frozenset(coordinate1), frozenset(coordinate2)]) not in exclude:
+                ax.plot([coordinate1[0], coordinate1[0]], [coordinate1[1], coordinate2[1]], color=col, zorder=1)
+                ax.plot([coordinate1[0], coordinate2[0]], [coordinate2[1], coordinate2[1]], color=col, zorder=1)
+            exclude.add(frozenset([frozenset(coordinate1), frozenset(coordinate2)]))
+            if j in duplication_nodes:
+                col = 'red'
+            else:
+                col = 'grey'
+            coordinate1 = coordinate2
+    print("we got to the end of draw species tree")
+
+
+# def make_interactogram():
+#     ancestral_seqs,altall_seqs,pp=read_ancestral_seqs('../MLtree')
+#     tree, tips, nodes=read_tree('../gene_tree_names_resolve.txt.nwk')
+#     inverse_resolve_dic=make_inverse_resolve_dic()
+#     #duplication_nodes=find_duplication_nodes(tree,'../Gene_duplications.txt',0, True, inverse_resolve_dic)
+#     duplication_nodes = find_duplication_nodes(tree, '../Gene_duplications.txt')
+#     done=set([])
+#     #the for loop here renames the LOST taxa to be so they don't have duplicate names
+#     for i in tips:
+#         if str(i) in done:
+#             count=1
+#             while str(i)+str(count) in done:
+#                 count+=1
+#             done.add(str(i)+str(count))
+#             i.__setattr__('name',str(i)+str(count))
+#         else:
+#             done.add(str(i))
+#     species_dic=get_species_resolve(tips)
+#     matched_ancestors, matched_extant,matched_dic,age_dic=find_matched_ancestors (species_dic, tree, duplication_nodes, nodes,ancestral_seqs, altall_seqs) # This retunrs node numbers in the numbering of the resolution tree.
+#     fig=plt.figure()
+#     ax = fig.add_subplot(111)
+#     species_tree, species_tips, species_nodes=read_tree('../speciestree_node_names.newick.nwk')
+#     species_coordinates=get_species_tip_coordinates(species_tree,species_nodes,species_tips)
+#     species_tree, species_tips, species_nodes=read_tree('../speciestree_node_names.newick.nwk')
+#     draw_species_tree(species_tree,species_nodes,species_tips,species_coordinates,[],ax)
+#     matched_dic,mapping=sort_out_resolved_nodes_and_species(matched_dic)
+#     matched_dic=add_loss_nodes(matched_dic)
+#     species_tree, species_tips, species_nodes=read_tree('../speciestree_node_names.newick.nwk')
+#     plot_species_interactions(species_coordinates,matched_dic,ax,species_tree,species_nodes, tree,tips, nodes,duplication_nodes, mapping)
+#     plt.show()
 
 
 
@@ -859,11 +1173,26 @@ if __name__ == "__main__":
     myduplication_nodes = find_duplication_nodes(mytree, '../Gene_duplications.txt')
     print("dupe nodes", myduplication_nodes)
     species = get_species(mytips)
-    print("species are: ", species)
+    print("species are: ", list(species.keys()))
+    species_tree, species_tips, species_nodes = read_tree('../speciestree_node_names.newick.nwk')  # contains species relationships
+    print("immediate species tree: ",species_tree)
+    print("immediate species tips: ",species_tips)
+    matched_ancestors, matched_extant, matched_dic, age_dic = find_matched_ancestors(species,species_nodes,species_tree, mytree, myduplication_nodes, mynodes)
+    #print("post find_matched species tree: ",species_tree)
+    #print("post find_matched species tips: ",species_tips)
+    #run_partial_orthologs(mytree, mytips,mydata_dic, myduplication_nodes,mynodes)
+    #find_partial_orthologs(mydata_dic, matched_ancestors, matched_extant, mytree, mynodes)
     # orthos =find_orthologs(tree, data_dic, tip_dic, duplication_nodes)
     # nonovers = pick_nonoverlap(tree,orthos,tip_dic)
-    # neutral_evo(mytree, mydata_dic, mytip_dic, myduplication_nodes)
-
+    #neutral_evo(mytree, mydata_dic, mytip_dic, myduplication_nodes)
+    species_coordinates = get_species_tip_coordinates(species_tree, species_nodes, species_tips)
+    fig=plt.figure()
+    ax = fig.add_subplot(111)
+    #matched_dic, mapping = sort_out_resolved_nodes_and_species(matched_dic)
+    print("late species tree: ", species_tree)
+    #done = plot_species_interactions(species_coordinates, matched_dic, ax, species_tree, species_nodes, mytree, mytips, mynodes, mapping, mydata_dic)
+    draw_species_tree(species_tree, species_nodes, species_tips, species_coordinates, myduplication_nodes, ax)
+    plt.show()
     # for myi in range(10):
     #     print("Here's some data", list(mydata_dic)[myi], " = ", mydata_dic[list(mydata_dic)[myi]])
     # print("length of dict", len(mydata_dic))
