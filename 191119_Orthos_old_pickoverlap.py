@@ -224,15 +224,12 @@ def find_orthologs(tree, data_dic, tip_dic, duplication_list):
             anc_in_data_dic = frozenset([list(tip_dic.keys())[list(tip_dic.values()).index(ancestor)]])
             try:
                 # check that the homodimers for protein1, protein2 and ancestor all homodimerize
-                if ancestor not in duplication_list and data_dic[anc_in_data_dic] == 1 and data_dic[
-                    frozenset([protein1])] == 1 and data_dic[frozenset([protein2])] == 1:
+                if ancestor not in duplication_list and data_dic[anc_in_data_dic] == 1 and data_dic[frozenset([protein1])] == 1 and data_dic[frozenset([protein2])] == 1:
                     if data_dic[i] == 1:
-                        ortho_dic[i] = [Phylo.BaseTree.TreeMixin.distance(tree, tip_dic[protein1], tip_dic[protein2]),
-                                        1]
+                        ortho_dic[i] = [Phylo.BaseTree.TreeMixin.distance(tree, tip_dic[protein1], tip_dic[protein2]), 1]
                         yes += 1
                     elif data_dic[i] == 0:
-                        ortho_dic[i] = [Phylo.BaseTree.TreeMixin.distance(tree, tip_dic[protein1], tip_dic[protein2]),
-                                        0]
+                        ortho_dic[i] = [Phylo.BaseTree.TreeMixin.distance(tree, tip_dic[protein1], tip_dic[protein2]), 0]
                         no += 1
             except KeyError:
                 missingpoints += 1
@@ -775,7 +772,7 @@ def run_partial_orthologs(tree, tips, data_dic, duplication_nodes, nodes, find_p
 #
 ##################################################################################################################
 def find_xy_max(coordinates):
-    'finds the dimensions of the tree for plotting circles'''
+    """finds the dimensions of the tree for plotting circles"""
     xs = [coordinates[i][0] for i in coordinates.keys()]
     ys = [coordinates[i][1] for i in coordinates.keys()]
     return [max(xs), abs(min(ys))]
@@ -797,6 +794,29 @@ def make_inverse_resolve_dic():
     for c, i in enumerate(tips1):
         inverse_resolve_dic[str(i)] = str(tips[c])
     return inverse_resolve_dic
+
+def convert_data_dic_to_species_names(data_dic, nodes):
+    new_dic = {}
+    for i in data_dic.keys():
+        val = data_dic[i]
+        newkey = []
+        for j in list(i):
+            if j.isdigit():
+                k = nodes[int(j)-172]
+                newkey.append(k)
+            else:
+                j = j.lower()
+                newkey.append(j)
+        new_dic[frozenset(newkey)] = val
+    return new_dic
+
+def convert_single_species_node_to_data_dic(node_name, matched_dic, tree_nodes):
+    if str(node_name) == 'Clade':
+        ret = tree_nodes.index(node_name)+172
+    else:
+        ret = node_name[:12]
+    return ret
+
 
 
 def match_nodes(resolve_dic):
@@ -888,12 +908,12 @@ def find_matched_ancestors(species_dic, species_nodes, species_tree, tree, dupli
                     speciation_dic[str(speciationnode)] = [ancestor]
                 LCAs.append(ancestor)
 
-    # Populate matched_dic with extant protein pairs from the same species, then from pairs from speciation_dic
+    # Populate matched_dic with extant protein pairs from the same species, then from pairs from species in speciation_dic
     for i in species_dic.keys():
         matched_dic[i] = [frozenset(i) for i in list(itertools.combinations(species_dic[i], 2))]
     for i in speciation_dic.keys():
         if len(speciation_dic[i]) == 1:
-            matched_dic[str(i)] = list(frozenset(speciation_dic[i]))
+            matched_dic[str(i)] = [frozenset(speciation_dic[i])]
         else:
             pairwise_combs = list(itertools.combinations(speciation_dic[i], 2))
             matched_dic[str(i)] = [frozenset(x) for x in pairwise_combs]
@@ -914,9 +934,9 @@ def sort_out_resolved_nodes_and_species(matched_dic):
         for c, j in enumerate(matched_dic[i]):
             listi = list(j)
             for d, k in enumerate(listi):
-                if k in resolve_dic.keys():
-                    listi[d] = resolve_dic[k]
-                    mapping[resolve_dic[k]] = k
+                if str(k) in resolve_dic.keys():
+                    listi[d] = resolve_dic[str(k)]
+                    mapping[str(resolve_dic[k])] = k
                 elif k in node_dict.keys():
                     listi[d] = node_dict[k]
                     mapping[node_dict[k]] = k
@@ -989,65 +1009,114 @@ def match_order(old_order, new_interactions, tree, tips, nodes, duplication_node
     return new_order
 
 
-def circle(node, matched_dic, coor, size, stretch, ax, order, data_dic):
+def add_loss_nodes(matched_dic):
+    """Takes lost genes and adds them to their species in matched_dic
+    Takes:
+        matched_dic: a dictionary of species to the genes that they hold. key = species name/node name, value = list frozensets of pairs of proteins in the key
+    Returns:
+         matched_dic: a dictionary of species to the genes that they hold. key = species name/node name, value = list frozensets of pairs of proteins in the key
+    """
+    #read in the tree and the other tree
+    tree, tips, nodes = read_tree('../speciestree_node_names.newick.nwk')
+    tree1, tips1, nodes1 = read_tree('../gene_tree_names_resolve.txt.nwk')
+    parent_dic = {}
+    for i in tree.find_clades():
+        trace = Phylo.BaseTree.TreeMixin.trace(tree, nodes[0], i)
+        if len(trace) > 2:
+            parent_dic[str(i)] = trace[-2]
+    # take the tips of the resolved species tree and if the tip is actually a node put it in matched_dic, such that the object in tips1
+    # points has a value as its parent
+    for i in tips1:
+        if str(i)[-4:] == 'LOST':
+            trace = Phylo.BaseTree.TreeMixin.trace(tree1, nodes1[0], i)
+            try:
+                matched_dic[str(parent_dic[str(i).split('*')[0]])].append(frozenset([str(trace[-2]) + "LOST"]))
+            except KeyError:
+                matched_dic[str(parent_dic[str(i).split('*')[0]])] = [frozenset([str(trace[-2]) +"LOST"])]
+    print("whoa")
+    return matched_dic
+
+
+def circle(node, matched_dic, coor, size, ax, order, data_dic, treenodes, inferred = False):
     stretch = 0.4
     ext_x, ext_y = size
     scale = 0.018
     x, y = coor
     node_set = set([])
+    # for i in matched_dic[node]:
+    #     for j in list(i):
+    #         if 'LOST' in j and j.split('*')[0] != node:  #
+    #             node_set.add(j)
+    #         elif 'LOST' not in j:
+    #             node_set.add(j)
+    # # node_list=list(node_set)
     for i in matched_dic[node]:
         for j in list(i):
-            if 'LOST' in j and j.split('*')[0] != node:  #
-                node_set.add(j)
-            elif 'LOST' not in j:
-                node_set.add(j)
-    # node_list=list(node_set)
-    if len(order) > 1:
-        node_list = order
-    else:
-        node_list = list(node_set)
+            if type(j) is str:
+                j = j.lower()
+            node_set.add(j)
+
+    # if len(order) > 1:
+    #     node_list = order
+    # else:
+    if inferred:
+        ax.scatter(coor[0], coor[1], color='tan', zorder=10, s=8, edgecolors='black')
+        return
+    node_list = list(node_set)
     if len(node_list) > 0:
         angle = 360.0 / len(node_list)
         xs = [np.cos(math.radians(i * angle)) * scale * ext_x + x for i in range(len(node_list))]
         ys = [np.sin(math.radians(i * angle)) * scale * ext_y * stretch + y for i in range(len(node_list))]
         cols = []
+        colnams = []
         for i in node_list:
+            print("node_list ", node_list)
+            nam = convert_single_species_node_to_data_dic(i, matched_dic, treenodes)
+            colnams.append(str(nam))
             try:
-                if data_dic[frozenset([i.lower()])] == 1:
-                    cols.append(cm.cool(1.0))
-                elif data_dic[frozenset([i.lower()])] == 0:
-                    cols.append(cm.cool(0.0))
-                else:
-                    cols.append(cm.Blues(1.0))
+                if data_dic[frozenset([i])] == 1:
+                    cols.append(cm.viridis(0.85))
 
+                elif data_dic[frozenset([i])] == 0:
+                    cols.append(cm.viridis(0.15))
+                else:
+                    cols.append(cm.Reds(1.0))
             except KeyError:
-                cols.append(cm.Greys(0.5))
-                print(i)
-        done = set([])
-        for c, i in enumerate(xs):
-            for d, j in enumerate(xs):
-                if c != d and frozenset([c, d]) not in done:
-                    try:
-                        if data_dic[frozenset([node_list[c].lower(), node_list[d].lower()])] == 1.0:
-                            ax.plot([i, j], [ys[c], ys[d]], color=cm.cool(1.0), zorder=1)
-                        elif data_dic[frozenset([node_list[c].lower(), node_list[d].lower()])] == 0.5:
-                            ax.plot([i, j], [ys[c], ys[d]], color='blue', zorder=1)
-                        elif data_dic[frozenset([node_list[c].lower(), node_list[d].lower()])] == 0.0:
-                            ax.plot([i, j], [ys[c], ys[d]], color=cm.cool(0.0), zorder=1)
-                    except KeyError:
-                        # ax.plot([i,j],[ys[c],ys[d]], color='grey',zorder=1, linestyle=':')
-                        a = 1
-                    done.add(frozenset([c, d]))
-        ax.scatter(xs, ys, color=cols, s=3, zorder=10, edgecolors='black')
+                if "lost" in i:
+                    cols.append((210/256,180/256, 140/256, 1)) #this is just the normalized hex code for tan
+                else:
+                    cols.append(cm.Greys(0.5))
+        ax.scatter(xs, ys, color=cols, s=8, zorder=10, edgecolors='black')
+        for i in range(len(colnams)):
+            if str(colnams[i]).isdigit() and int(colnams[i]) > 170 and int(colnams[i]) < 177:
+                    ax.text(xs[i] + 0.2, ys[i] - 0.33, s=colnams[i], fontsize=10, color = "red")
+            else:
+                ax.text(xs[i]+0.2, ys[i] -0.33, s = colnams[i], fontsize=5)
+        # Draw lines between the nodes all the nodes colored by whether there is an interaction or not
+        for c, d in itertools.combinations(range(len(node_list)), 2):
+            try:
+                if data_dic[frozenset([node_list[c], node_list[d]])] == 1.0:
+                    ax.plot([xs[c], xs[d]], [ys[c], ys[d]], color=cm.viridis(0.85), zorder=1)
+                elif data_dic[frozenset([node_list[c], node_list[d]])] == 0.5:
+                    ax.plot([xs[c], xs[d]], [ys[c], ys[d]], color=cm.viridis(0.5), zorder=1)
+                elif data_dic[frozenset([node_list[c], node_list[d]])] == 0.0:
+                    ax.plot([xs[c], xs[d]], [ys[c], ys[d]], color=cm.viridis(0.15), zorder=1)
+            except KeyError:
+                pass
         xleft, xright = ax.get_xlim()
         ybottom, ytop = ax.get_ylim()
         ratio = 2.5
         ax.set_aspect(abs((xright - xleft) / (ybottom - ytop)) * ratio)
         ax.set_axis_off()
+    else:
+        try:
+            val = data_dic[frozenset([str(node).lower()])]
+            ax.scatter(coor[0], coor[1],  color=cm.viridis(abs(val - 0.15)),zorder = 10, s=8, edgecolors='black')
+        except KeyError:
+            pass
 
 
-def plot_species_interactions(species_coordinates, matched_dic, ax, species_tree, species_nodes, tree, tips, nodes,
-                              mapping, data_dic):
+def plot_species_interactions(species_coordinates, matched_dic, ax, species_tree, tree, tree_nodes, data_dic):
     ext_x, ext_y = find_xy_max(species_coordinates)
     inverse_resolve_dic = make_inverse_resolve_dic()
 
@@ -1055,53 +1124,48 @@ def plot_species_interactions(species_coordinates, matched_dic, ax, species_tree
     # duplication_nodes = find_duplication_nodes(tree, '../Gene_duplications.txt', 0, True, inverse_resolve_dic)
     duplication_nodes = find_duplication_nodes(tree, '../Gene_duplications.txt')
     order_dic = {}  # this is used to keep track of the orientation of the dots across node in the interactogram
-    # First let's find the LCA of metazoa
-    ancestor = Phylo.BaseTree.TreeMixin.common_ancestor(species_tree, ['Drosophila_melanogaster', 'Actinia_tenebrosa'])
-    #deepest = str(species_nodes.index(ancestor) + 53)
-    deepest = ancestor
-    deepest_set = set()
-    for i in matched_dic[str(deepest)]:
-        deepest_set.update(list(i))
-    order_dic[deepest] = list(deepest_set)  # Now we have a fixed order at the deppest node.
-    descendants = Phylo.BaseTree.TreeMixin.get_terminals(
-        Phylo.BaseTree.TreeMixin.common_ancestor(species_tree, ['Drosophila_melanogaster', 'Actinia_tenebrosa']))
+    # # First let's find the LCA of metazoa
+    # deepest = Phylo.BaseTree.TreeMixin.common_ancestor(species_tree, ['Drosophila_melanogaster', 'Actinia_tenebrosa'])
+    # #deepest = str(species_nodes.index(ancestor) + 53)
+    # #deepest = ancestor
+    # deepest_set = set()
+    # for i in matched_dic[str(deepest)]:
+    #     deepest_set.update(list(i))
+    # order_dic[deepest] = list(deepest_set)  # Now we have a fixed order at the deppest node.
+    # descendants = Phylo.BaseTree.TreeMixin.get_terminals(deepest)
     done = set([])
-    for i in descendants:
-        trace = Phylo.BaseTree.TreeMixin.trace(species_tree, ancestor, i)
-        for c, j in enumerate(trace[1:]):
-            if j not in done:
-                try:
-                    order = match_order(order_dic[str(trace[c])], matched_dic[str(j)], tree, tips, nodes, duplication_nodes, mapping)
-                except ValueError:
-                    try:
-                        order = match_order(order_dic[str(trace[c])], matched_dic[str(j)], tree, tips, nodes, duplication_nodes, mapping)
-                    except:
-                        print("there is so much failyre", "order_dic ", str(species_nodes.index(trace[c]) + 53), "\nmatched_dic presumably unprintable", "\nc / j: ", c, j)
-                except KeyError:
-                    print("Well that shit didn't work\n", "order_dic ", str(trace[c]), "\nmatched_dic ", str(j), "\nc / j: ", c, j)
-
-                done.add(j)
-                try:
-                    order_dic[str(j)] = order
-                except ValueError:
-                    order_dic[str(j)] = order
-
-    stretch = 1
+    # for i in descendants:
+    #     trace = Phylo.BaseTree.TreeMixin.trace(species_tree, deepest, i)
+    #     for c, j in enumerate(trace[1:]):
+    #         if j not in done:
+    #             try:
+    #                 order = match_order(order_dic[str(trace[c])], matched_dic[str(j)], tree, tips, nodes, duplication_nodes, mapping)
+    #             except ValueError:
+    #                 try:
+    #                     order = match_order(order_dic[str(trace[c])], matched_dic[str(j)], tree, tips, nodes, duplication_nodes, mapping)
+    #                 except:
+    #                     print("there is so much failyre", "order_dic ", str(species_nodes.index(trace[c]) + 53), "\nmatched_dic presumably unprintable", "\nc / j: ", c, j)
+    #             except KeyError:
+    #                 print("Well that shit didn't work\n", "order_dic ", str(trace[c]), "\nmatched_dic ", str(j), "\nc / j: ", c, j)
+    #
+    #             done.add(j)
+    #             try:
+    #                 order_dic[str(j)] = order
+    #             except ValueError:
+    #                 order_dic[str(j)] = order
+    #             except:
+    #                 print("we're adding nothing to the dic because there isn't anything in matched at 101n")
+    #
+    # stretch = 1
     for i in matched_dic.keys():
-        if len(matched_dic[i]) > 0:
+        #if len(matched_dic[i]) > 0:
 
-            coor = species_coordinates[str(i)]
-            try:
-                circle(i, matched_dic, coor, [ext_x + 1, ext_y + 1], stretch, ax, order_dic[i], data_dic)
-            except KeyError:
-                circle(i, matched_dic, coor, [ext_x + 1, ext_y + 1], stretch, ax, [], data_dic)
-        elif frozenset([i.lower()]) in data_dic.keys():
-
-            coor = species_coordinates[str(i)]
-            #
-            plt.plot(coor[0], coor[1] * stretch, 'o', color=cm.cool(data_dic[frozenset([i.lower()])]), markersize=2, markeredgecolor='black')
-
-    plt.savefig('species_interactions.eps')
+        coor = species_coordinates[str(i)]
+        try:
+            circle(i, matched_dic, coor, [ext_x + 1, ext_y + 1], ax, order_dic[i], data_dic, tree_nodes)
+        except KeyError:
+            circle(i, matched_dic, coor, [ext_x + 1, ext_y + 1], ax, [], data_dic, tree_nodes)
+    #plt.savefig('species_interactions.eps')
     return done
 
 
@@ -1128,9 +1192,12 @@ def draw_species_tree(input_tree, nodes, tips, coordinates, duplication_nodes, s
         for j in trace:
             if j in tips:
                 coordinate2 = coordinates[str(j)]
-                subfig.text(coordinate2[0] + 1.5, coordinate2[1] - 0.33, str(j).replace("_", " "), fontsize=5)
+                genus = str(j)[0]
+                species = str(j).split("_")[1]
+                subfig.text(coordinate2[0] + 1.5, coordinate2[1] - 0.33, genus + ". " + species, fontsize=5)
             else:
                 coordinate2 = coordinates[str(j)]
+                subfig.text(coordinate2[0] + .25, coordinate2[1], str(j), fontsize=5)
             if frozenset([frozenset(coordinate1), frozenset(coordinate2)]) not in exclude:
                 subfig.plot([coordinate1[0], coordinate1[0]], [coordinate1[1], coordinate2[1]], color=col, zorder=1)
                 subfig.plot([coordinate1[0], coordinate2[0]], [coordinate2[1], coordinate2[1]], color=col, zorder=1)
@@ -1167,7 +1234,7 @@ def draw_species_tree(input_tree, nodes, tips, coordinates, duplication_nodes, s
 #     species_coordinates=get_species_tip_coordinates(species_tree,species_nodes,species_tips)
 #     species_tree, species_tips, species_nodes=read_tree('../speciestree_node_names.newick.nwk')
 #     draw_species_tree(species_tree,species_nodes,species_tips,species_coordinates,[],ax)
-#     matched_dic,mapping=sort_out_resolved_nodes_and_species(matched_dic)
+#     matched_dic,mapping=sort_out_res1olved_nodes_and_species(matched_dic)
 #     matched_dic=add_loss_nodes(matched_dic)
 #     species_tree, species_tips, species_nodes=read_tree('../speciestree_node_names.newick.nwk')
 #     plot_species_interactions(species_coordinates,matched_dic,ax,species_tree,species_nodes, tree,tips, nodes,duplication_nodes, mapping)
@@ -1198,13 +1265,19 @@ if __name__ == "__main__":
     # nonovers = pick_nonoverlap(tree,orthos,tip_dic)
     # neutral_evo(mytree, mydata_dic, mytip_dic, myduplication_nodes)
     species_coordinates = get_species_tip_coordinates(species_tree, species_nodes, species_tips)
-    fig = plt.figure()
+    fig = plt.figure(figsize=(10,30))
     ax = fig.add_subplot(111)
-    matched_dic, mapping = sort_out_resolved_nodes_and_species(matched_dic)
-    print(matched_dic)
-    #print("late species tree: ", species_tree)
-    done = plot_species_interactions(species_coordinates, matched_dic, ax, species_tree, species_nodes, mytree, mytips, mynodes, mapping, mydata_dic)
+    #matched_dic, mapping = sort_out_resolved_nodes_and_species(matched_dic)
+    matched_dic = add_loss_nodes(matched_dic)
+    newdict = convert_data_dic_to_species_names(mydata_dic, mynodes)#print("late species tree: ", species_tree)
+    #
+
     draw_species_tree(species_tree, species_nodes, species_tips, species_coordinates, myduplication_nodes, ax)
+    done = plot_species_interactions(species_coordinates, matched_dic, ax, species_tree, mytree, mynodes, newdict)
+
+
+    figure = plt.gcf()
+    figure.savefig('../200106_full_paralogs.pdf', figsize = (100, 30))
     plt.show()
     # for myi in range(10):
     #     print("Here's some data", list(mydata_dic)[myi], " = ", mydata_dic[list(mydata_dic)[myi]])
