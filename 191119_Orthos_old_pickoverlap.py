@@ -1008,15 +1008,40 @@ def match_order(old_order, new_interactions, tree, tips, nodes, duplication_node
         print('shit')
     return new_order
 
+def order_lookup(list_of_proteins_to_plot, order_list):
+    tree, tips, nodes = read_tree('../190918_EA_tree1only.txt')
+    tree1, tips1, nodes1 = read_tree('../gene_tree_names_resolve.txt.nwk')
+    new_loptp = []
+    node_set = set()
+    for i in list_of_proteins_to_plot:
+        for j in list(i):
+            node_set.add(j)
+    for i in node_set:
+        position = 0
+        terms = []
+        node_loc = tree.find_clades(name = i)
+        for clade in node_loc:
+            if clade.is_terminal():
+                terms.append(clade)
+        new_clade = Phylo.BaseTree.TreeMixin.common_ancestor(tree1,terms)
+        trace = Phylo.BaseTree.TreeMixin.trace(tree1, nodes1[0], new_clade)
+        if any(j in trace for j in order_list):
+            position = order_list.index(j)
+            new_loptp.append(position)
+
+    return new_loptp
+
 
 def add_loss_nodes(matched_dic):
-    """Takes lost genes and adds them to their species in matched_dic
+    """Takes lost genes and adds them to the parent that would have contained them in matched_dic. The dictionary of
+     parents must be built first as biopython doesn't seem to have that function. Data manipulation in circle needs
+     "LOST" to be a part of lost proteins names.
     Takes:
-        matched_dic: a dictionary of species to the genes that they hold. key = species name/node name, value = list frozensets of pairs of proteins in the key
+        matched_dic: a dictionary of species to the genes that they hold. key = species name/node name, value = list frozensets of pairs of proteins in the key species
     Returns:
-         matched_dic: a dictionary of species to the genes that they hold. key = species name/node name, value = list frozensets of pairs of proteins in the key
+         matched_dic: a dictionary of species to the genes that they hold. key = species name/node name, value = list frozensets of pairs of proteins in the key species
+         now with lost proteins
     """
-    #read in the tree and the other tree
     tree, tips, nodes = read_tree('../speciestree_node_names.newick.nwk')
     tree1, tips1, nodes1 = read_tree('../gene_tree_names_resolve.txt.nwk')
     parent_dic = {}
@@ -1024,8 +1049,7 @@ def add_loss_nodes(matched_dic):
         trace = Phylo.BaseTree.TreeMixin.trace(tree, nodes[0], i)
         if len(trace) > 2:
             parent_dic[str(i)] = trace[-2]
-    # take the tips of the resolved species tree and if the tip is actually a node put it in matched_dic, such that the object in tips1
-    # points has a value as its parent
+    # take the resolved gene tree and searches it for lost tips. It adds the lost proteins to the parent of the species that lost them.
     for i in tips1:
         if str(i)[-4:] == 'LOST':
             trace = Phylo.BaseTree.TreeMixin.trace(tree1, nodes1[0], i)
@@ -1033,7 +1057,6 @@ def add_loss_nodes(matched_dic):
                 matched_dic[str(parent_dic[str(i).split('*')[0]])].append(frozenset([str(trace[-2]) + "LOST"]))
             except KeyError:
                 matched_dic[str(parent_dic[str(i).split('*')[0]])] = [frozenset([str(trace[-2]) +"LOST"])]
-    print("whoa")
     return matched_dic
 
 
@@ -1070,7 +1093,7 @@ def circle(node, matched_dic, coor, size, ax, order, data_dic, treenodes, inferr
         cols = []
         colnams = []
         for i in node_list:
-            print("node_list ", node_list)
+            #print("node_list ", node_list)
             nam = convert_single_species_node_to_data_dic(i, matched_dic, treenodes)
             colnams.append(str(nam))
             try:
@@ -1125,14 +1148,14 @@ def plot_species_interactions(species_coordinates, matched_dic, ax, species_tree
     duplication_nodes = find_duplication_nodes(tree, '../Gene_duplications.txt')
     order_dic = {}  # this is used to keep track of the orientation of the dots across node in the interactogram
     # # First let's find the LCA of metazoa
-    # deepest = Phylo.BaseTree.TreeMixin.common_ancestor(species_tree, ['Drosophila_melanogaster', 'Actinia_tenebrosa'])
-    # #deepest = str(species_nodes.index(ancestor) + 53)
-    # #deepest = ancestor
-    # deepest_set = set()
-    # for i in matched_dic[str(deepest)]:
-    #     deepest_set.update(list(i))
-    # order_dic[deepest] = list(deepest_set)  # Now we have a fixed order at the deppest node.
-    # descendants = Phylo.BaseTree.TreeMixin.get_terminals(deepest)
+    deepest = Phylo.BaseTree.TreeMixin.common_ancestor(species_tree, ['Drosophila_melanogaster', 'Actinia_tenebrosa'])
+    #deepest = str(species_nodes.index(ancestor) + 53)
+    #deepest = ancestor
+    deepest_set = set()
+    for i in matched_dic[str(deepest)]:
+        deepest_set.update(list(i))
+    order_dic[deepest] = list(deepest_set)  # Now we have a fixed order at the deppest node.
+    descendants = Phylo.BaseTree.TreeMixin.get_terminals(deepest)
     done = set([])
     # for i in descendants:
     #     trace = Phylo.BaseTree.TreeMixin.trace(species_tree, deepest, i)
@@ -1159,7 +1182,7 @@ def plot_species_interactions(species_coordinates, matched_dic, ax, species_tree
     # stretch = 1
     for i in matched_dic.keys():
         #if len(matched_dic[i]) > 0:
-
+        neworder = order_lookup(matched_dic[i], order_dic)
         coor = species_coordinates[str(i)]
         try:
             circle(i, matched_dic, coor, [ext_x + 1, ext_y + 1], ax, order_dic[i], data_dic, tree_nodes)
@@ -1207,6 +1230,7 @@ def draw_species_tree(input_tree, nodes, tips, coordinates, duplication_nodes, s
             else:
                 col = 'grey'
             coordinate1 = coordinate2
+    return
 
 
 # def make_interactogram():
@@ -1277,7 +1301,7 @@ if __name__ == "__main__":
 
 
     figure = plt.gcf()
-    figure.savefig('../200106_full_paralogs.pdf', figsize = (100, 30))
+    figure.savefig('../200107_full_paralogs.pdf', figsize = (100, 30))
     plt.show()
     # for myi in range(10):
     #     print("Here's some data", list(mydata_dic)[myi], " = ", mydata_dic[list(mydata_dic)[myi]])
