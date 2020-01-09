@@ -1008,6 +1008,32 @@ def match_order(old_order, new_interactions, tree, tips, nodes, duplication_node
         print('shit')
     return new_order
 
+def to_gene_rec_form(clade, tips1):
+    types = ['VBP', 'HLF', 'HLF_', 'HLF_insects',  'TEF', 'E4BP4', 'DBP', 'PAR', 'Par1', 'Par2', 'New', 'Weird'] #order of the list matters because I'm a bad programmer. Big
+    lastnum = clade[-1:]
+    islastnum = False
+    thistype = ""
+    if lastnum.isdigit():
+        islastnum = True
+    for i in types:
+        if i in clade:
+            thistype = i
+
+    if islastnum:
+        newname = clade[len(thistype):-1] + thistype + lastnum
+    elif thistype == 'HLF_':
+        thistype = 'HLF'
+        newname = clade[(len(thistype) +1):] + thistype #I have no idea why this is necessary but the name of daphnia pulex between the systems needs it
+    else:
+        newname = clade[len(thistype):] + thistype
+
+    # if str(newname) in tips1:
+    #     print("New clade name, ", newname, " is in tips1")
+    # else:
+    #     print("New clade name, ", newname, " is not in tips1")
+    return newname
+
+
 def order_lookup(list_of_proteins_to_plot, order_list):
     tree, tips, nodes = read_tree('../190918_EA_tree1only.txt')
     tree1, tips1, nodes1 = read_tree('../gene_tree_names_resolve.txt.nwk')
@@ -1017,18 +1043,36 @@ def order_lookup(list_of_proteins_to_plot, order_list):
         for j in list(i):
             node_set.add(j)
     for i in node_set:
+        #newi = to_gene_rec_form(i, tips1)
         position = 0
-        terms = []
-        node_loc = tree.find_clades(name = i)
+        zpos = 1
+        terms, ints = [], []
+        node_loc = tree.find_clades(name = str(i))
         for clade in node_loc:
             if clade.is_terminal():
+                clade = to_gene_rec_form(str(clade), tips1)
                 terms.append(clade)
-        new_clade = Phylo.BaseTree.TreeMixin.common_ancestor(tree1,terms)
-        trace = Phylo.BaseTree.TreeMixin.trace(tree1, nodes1[0], new_clade)
-        if any(j in trace for j in order_list):
-            position = order_list.index(j)
-            new_loptp.append(position)
+        if len(terms) > 1:
+            new_clade = Phylo.BaseTree.TreeMixin.common_ancestor(tree1,[str(i) for i in terms])
+        elif len(terms) == 1:
+            new_clade = terms[0]
+        else:
+            print("shit, we got no clades")
+        try:
+            trace = Phylo.BaseTree.TreeMixin.trace(tree1, nodes1[0], str(new_clade))
+        except ValueError:
+            print("new clade, named ", new_clade, " was not in tree")
 
+        trace = [str(j) for j in trace]
+        ints = intersection(trace, order_list)
+        if len(ints) == 1:
+            position = order_list.index(ints[0])
+            for j in new_loptp:
+                if j[1] == position:
+                    zpos += 1
+            new_loptp.append([i, position, zpos])
+        else:
+            print("length of ints wrong ", ints)
     return new_loptp
 
 
@@ -1060,7 +1104,7 @@ def add_loss_nodes(matched_dic):
     return matched_dic
 
 
-def circle(node, matched_dic, coor, size, ax, order, data_dic, treenodes, inferred = False):
+def circle(node, matched_dic, coor, size, ax, order_list, data_dic, treenodes, inferred = False):
     stretch = 0.4
     ext_x, ext_y = size
     scale = 0.018
@@ -1086,44 +1130,59 @@ def circle(node, matched_dic, coor, size, ax, order, data_dic, treenodes, inferr
         ax.scatter(coor[0], coor[1], color='tan', zorder=10, s=8, edgecolors='black')
         return
     node_list = list(node_set)
+    for i in order_list:
+        i[0] = i[0].lower()
     if len(node_list) > 0:
-        angle = 360.0 / len(node_list)
-        xs = [np.cos(math.radians(i * angle)) * scale * ext_x + x for i in range(len(node_list))]
-        ys = [np.sin(math.radians(i * angle)) * scale * ext_y * stretch + y for i in range(len(node_list))]
+        #angle = 360.0 / len(node_list)
+        # xs = [np.cos(math.radians(i * angle)) * scale * ext_x + x for i in range(len(node_list))]
+        #ys = [np.sin(math.radians(i * angle)) * scale * ext_y * stretch + y for i in range(len(node_list))]
+        angle = 360.0 / 5
+        xs = [np.cos(math.radians(i * angle)) * scale * ext_x + x for i in range(5)]
+        ys = [np.sin(math.radians(i * angle)) * scale * ext_y * stretch + y for i in range(5)]
+
         cols = []
         colnams = []
-        for i in node_list:
-            #print("node_list ", node_list)
-            nam = convert_single_species_node_to_data_dic(i, matched_dic, treenodes)
-            colnams.append(str(nam))
+        xpoints = []
+        ypoints = []
+        #for i in node_list
+        plottedpoints = []
+        for i in order_list:
+            i[0] = i[0].lower()
+            xpoints.append(xs[i[1]] + (xs[i[1]] - x )* i[2])
+            ypoints.append(ys[i[1]] + (ys[i[1]] - y )* i[2])
+            nam = convert_single_species_node_to_data_dic(i[0], matched_dic, treenodes)
+            colnams.append([str(nam), xs[i[1]] * i[2], ys[i[1]] * i[2]])
             try:
-                if data_dic[frozenset([i])] == 1:
+                if data_dic[frozenset([i[0]])] == 1:
                     cols.append(cm.viridis(0.85))
 
-                elif data_dic[frozenset([i])] == 0:
+                elif data_dic[frozenset([i[0]])] == 0:
                     cols.append(cm.viridis(0.15))
                 else:
                     cols.append(cm.Reds(1.0))
             except KeyError:
-                if "lost" in i:
+                if "lost" in i[0]:
                     cols.append((210/256,180/256, 140/256, 1)) #this is just the normalized hex code for tan
                 else:
                     cols.append(cm.Greys(0.5))
-        ax.scatter(xs, ys, color=cols, s=8, zorder=10, edgecolors='black')
-        for i in range(len(colnams)):
-            if str(colnams[i]).isdigit() and int(colnams[i]) > 170 and int(colnams[i]) < 177:
-                    ax.text(xs[i] + 0.2, ys[i] - 0.33, s=colnams[i], fontsize=10, color = "red")
+            if i[2] > 1:
+                print("here")
+        ax.scatter(xpoints, ypoints, color=cols, s=8, zorder=10, edgecolors='black')
+        for j in range(len(colnams)):
+            if str(colnams[j][0]).isdigit() and int(colnams[j][0]) > 170 and int(colnams[j][0]) < 177:
+                ax.text(colnams[j][1]+0.2, colnams[j][2] -0.33, s = colnams[j][0], fontsize=10, color = "red")
             else:
-                ax.text(xs[i]+0.2, ys[i] -0.33, s = colnams[i], fontsize=5)
+                print("text being printed ", colnams[j], " num cols = ", len(colnams))
+                ax.text(colnams[j][1]+0.2, colnams[j][2] -0.33, s = colnams[j][0], fontsize=5)
         # Draw lines between the nodes all the nodes colored by whether there is an interaction or not
-        for c, d in itertools.combinations(range(len(node_list)), 2):
+        for c, d in itertools.combinations(range(len(order_list)), 2):
             try:
-                if data_dic[frozenset([node_list[c], node_list[d]])] == 1.0:
-                    ax.plot([xs[c], xs[d]], [ys[c], ys[d]], color=cm.viridis(0.85), zorder=1)
-                elif data_dic[frozenset([node_list[c], node_list[d]])] == 0.5:
-                    ax.plot([xs[c], xs[d]], [ys[c], ys[d]], color=cm.viridis(0.5), zorder=1)
-                elif data_dic[frozenset([node_list[c], node_list[d]])] == 0.0:
-                    ax.plot([xs[c], xs[d]], [ys[c], ys[d]], color=cm.viridis(0.15), zorder=1)
+                if data_dic[frozenset([order_list[c][0], order_list[d][0]])] == 1.0:
+                    ax.plot([xs[order_list[c][1]], xs[order_list[d][1]]], [ys[order_list[c][1]], ys[order_list[d][1]]], color=cm.viridis(0.85), zorder=1)
+                elif data_dic[frozenset([order_list[c][0], order_list[d][0]])] == 0.5:
+                    ax.plot([xs[order_list[c][1]], xs[order_list[d][1]]], [ys[order_list[c][1]], ys[order_list[d][1]]], color=cm.viridis(0.5), zorder=1)
+                elif data_dic[frozenset([order_list[c][0], order_list[d][0]])] == 0.0:
+                    ax.plot([xs[order_list[c][1]], xs[order_list[d][1]]], [ys[order_list[c][1]], ys[order_list[d][1]]], color=cm.viridis(0.15), zorder=1)
             except KeyError:
                 pass
         xleft, xright = ax.get_xlim()
@@ -1154,7 +1213,7 @@ def plot_species_interactions(species_coordinates, matched_dic, ax, species_tree
     deepest_set = set()
     for i in matched_dic[str(deepest)]:
         deepest_set.update(list(i))
-    order_dic[deepest] = list(deepest_set)  # Now we have a fixed order at the deppest node.
+    order_list = list(deepest_set)  # Now we have a fixed order at the deppest node.
     descendants = Phylo.BaseTree.TreeMixin.get_terminals(deepest)
     done = set([])
     # for i in descendants:
@@ -1180,12 +1239,28 @@ def plot_species_interactions(species_coordinates, matched_dic, ax, species_tree
     #                 print("we're adding nothing to the dic because there isn't anything in matched at 101n")
     #
     # stretch = 1
+    tree, tips, nodes = read_tree('../speciestree_node_names.newick.nwk')
+    tree1, tips1, nodes1 = read_tree('../gene_tree_names_resolve.txt.nwk')
+    cleanorder_list = []
+    for j in order_list:
+        if type(j) == str:
+            j =  j.replace('LOST', '')
+            cleanorder_list.append(str(j))
+    for j in order_list:
+        if not type(j) == str:
+            terms = j.get_terminals()
+            tree1terms = []
+            for k in terms:
+                clade = to_gene_rec_form(str(k), tips1)
+                tree1terms.append(clade)
+            j = Phylo.BaseTree.TreeMixin.common_ancestor(tree1, tree1terms)
+            cleanorder_list.append(str(j))
     for i in matched_dic.keys():
         #if len(matched_dic[i]) > 0:
-        neworder = order_lookup(matched_dic[i], order_dic)
+        neworder = order_lookup(matched_dic[i], cleanorder_list)
         coor = species_coordinates[str(i)]
         try:
-            circle(i, matched_dic, coor, [ext_x + 1, ext_y + 1], ax, order_dic[i], data_dic, tree_nodes)
+            circle(i, matched_dic, coor, [ext_x + 1, ext_y + 1], ax, neworder, data_dic, tree_nodes)
         except KeyError:
             circle(i, matched_dic, coor, [ext_x + 1, ext_y + 1], ax, [], data_dic, tree_nodes)
     #plt.savefig('species_interactions.eps')
@@ -1289,7 +1364,7 @@ if __name__ == "__main__":
     # nonovers = pick_nonoverlap(tree,orthos,tip_dic)
     # neutral_evo(mytree, mydata_dic, mytip_dic, myduplication_nodes)
     species_coordinates = get_species_tip_coordinates(species_tree, species_nodes, species_tips)
-    fig = plt.figure(figsize=(10,30))
+    fig = plt.figure(figsize=(4,8))
     ax = fig.add_subplot(111)
     #matched_dic, mapping = sort_out_resolved_nodes_and_species(matched_dic)
     matched_dic = add_loss_nodes(matched_dic)
