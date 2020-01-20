@@ -10,7 +10,7 @@ import itertools
 from matplotlib import cm
 import math
 import copy
-
+from scipy.interpolate import CubicSpline
 
 def read_tree(treefile, silent=True):
     """Takes a phylogenetic tree file
@@ -439,6 +439,13 @@ def intersection(lst1, lst2):
     return lst3
 
 
+def sort_list(list1, list2):
+    zipped_pairs = zip(list2, list1)
+
+    z = [x for _, x in sorted(zipped_pairs)]
+
+    return z
+
 # def read_ancestral_seqs(treename, silent=True):
 #    '''Legacy code as far as I can tell
 #        Takes:
@@ -519,7 +526,7 @@ def get_species(tips):
                     species_dic[i[len(j):]] = [i + numeral]
                     found = True
                 break
-        if found == False:
+        if not found:
             try:
                 species_dic[i].append(i + numeral)
 
@@ -527,6 +534,7 @@ def get_species(tips):
                 species_dic[i] = [i + numeral]
 
     return species_dic
+
 
 def find_matched_extant(species_dic):
     matched_extant = []
@@ -559,10 +567,8 @@ def find_partial_orthologs(data_dic, matched_ancestors, matched_extant, tree, no
         c += 1
         print(c)
         try:  # this is to deal with the find_ancestral_pair function not giving output when the pair is dumb
-            ancestral_pair, mismatched_pairs, mismatched_distance, ancestors_descendants = find_ancestral_pair(tree,
-                                                                                                               i[0],
-                                                                                                               i[1],
-                                                                                                               nodes)
+            ancestral_pair, mismatched_pairs, mismatched_distance, ancestors_descendants = find_ancestral_pair(tree, i[0], i[1], nodes)
+
             if ancestral_pair in data_dic.keys() and data_dic[ancestral_pair] == 0 and len(list(
                     ancestral_pair)) == 2:  # If you have the ancestral pair in the data, if it didn't interact, and if it was actually a pair, not just a dimer. This last one we could skip
                 for d, j in enumerate(mismatched_pairs):
@@ -572,7 +578,7 @@ def find_partial_orthologs(data_dic, matched_ancestors, matched_extant, tree, no
                         partial_ortho_dic[j] = [mismatched_distance[d], 0, ancestors_descendants[d]]
 
         except TypeError:
-            a = 1
+            pass
     print('Done finding partial orthologs')
     print('Writing partial orthologs file')
     for i in partial_ortho_dic.keys():
@@ -586,7 +592,7 @@ def find_partial_orthologs(data_dic, matched_ancestors, matched_extant, tree, no
 
 
 def read_partial_ortholog_file(tree, nodes, data_dic):
-    ''' If partaial ortholog data is already generated, just read in the file'''
+    """If partaial ortholog data is already generated, just read in the file"""
     f = open('Partial_orthologs.txt', 'r')
     lines = f.readlines()
     partial_ortholo_dic = {}
@@ -795,6 +801,7 @@ def make_inverse_resolve_dic():
         inverse_resolve_dic[str(i)] = str(tips[c])
     return inverse_resolve_dic
 
+
 def convert_data_dic_to_species_names(data_dic, nodes):
     new_dic = {}
     for i in data_dic.keys():
@@ -810,13 +817,34 @@ def convert_data_dic_to_species_names(data_dic, nodes):
         new_dic[frozenset(newkey)] = val
     return new_dic
 
-def convert_single_species_node_to_data_dic(node_name, matched_dic, tree_nodes):
+
+def convert_single_species_node_to_data_dic(node_name, tree_nodes):
     if str(node_name) == 'Clade':
         ret = tree_nodes.index(node_name)+172
     else:
         ret = node_name[:12]
     return ret
 
+
+def parabola(point1, point2):
+    """"Makes a parabola on the x-axis from two points, and returns it.
+    Takes:
+        point1: a pair of coordinates [x, y] where both are floats
+        point2: a pair of coordinates [x, y] where both are floats
+    Returns:
+        y: a list of the x coordinates of the parabola
+        x: a list of the y coordinates of the parabola
+    """
+
+    point3 = [max([point1[0], point2[0]]) + (abs((point1[1] - point2[1])/2)**2), np.average([point1[1], point2[1]])]
+
+    x = np.linspace(min(point1[1], point2[1], point3[1]), max(point1[1], point2[1], point3[1]), 20)
+    xs = sort_list([point1[0], point2[0], point3[0]], [point1[1], point2[1], point3[1]])
+    ys = [point1[1], point2[1], point3[1]]
+    ys.sort()
+    cs = CubicSpline(ys, xs, axis=1)
+    y = cs(x)
+    return y, x
 
 
 def match_nodes(resolve_dic):
@@ -870,22 +898,20 @@ def get_species_tip_coordinates(tree, nodes, tips):
     corr = {}
     for c, i in enumerate(tips):
         corr[str(i)] = [Phylo.BaseTree.TreeMixin.distance(tree, nodes[0], i), c * -1]
-    for nod  in Phylo.BaseTree.TreeMixin.get_nonterminals(tree, order = 'postorder'):
-        xval = min(corr[str(nod[0])][0], corr[str(nod[1])][0]) - 1 # go one to the left of the current left most
-        yval = np.mean([corr[str(nod[0])][1], corr[str(nod[1])][1]]) # average between child nodes
+    for nod in Phylo.BaseTree.TreeMixin.get_nonterminals(tree, order='postorder'):
+        xval = min(corr[str(nod[0])][0], corr[str(nod[1])][0]) - 1  # go one to the left of the current left most
+        yval = np.mean([corr[str(nod[0])][1], corr[str(nod[1])][1]])  # average between child nodes
         corr[str(nod)] = [xval, yval]
     return corr
 
 
-def find_matched_ancestors(species_dic, species_nodes, species_tree, tree, duplication_nodes, nodes):
+def find_matched_ancestors(species_dic, species_tree, tree, duplication_nodes):
     """ Finds all pairs of time matched ancestors and pairs of extant paralogs within the same species.
     Takes:
         species_dic: a dictionary of species and their proteins in the form key = species, value = list of proteins from that species
-        species_nodes: list of clade objects that are nodes from the species tree
         species_tree: a tree object containing the species relationships
         tree: a tree object containing the protein interacitons
         duplication nodes: a list containing clades where duplications happened
-        nodes: a list of clade objects from tree that correspond to the nodes
     Returns:
         matched_ancestors: a list of frozensets containing time matched ancestral nodes
         matched_dic: a dictionary of species to a list of proteins pairs in those species."""
@@ -900,10 +926,10 @@ def find_matched_ancestors(species_dic, species_nodes, species_tree, tree, dupli
         combs = [(x, y) for x in species_dic[i[0]] for y in species_dic[i[1]]]  # pick two proteins from our different species
         for k in combs:
             ancestor = Phylo.BaseTree.TreeMixin.common_ancestor(tree, [k[0], k[1]])
-            if ancestor not in LCAs and ancestor not in duplication_nodes: # if the ancestor isn't a duplication node and we haven't seen it before
+            if ancestor not in LCAs and ancestor not in duplication_nodes:  # if the ancestor isn't a duplication node and we haven't seen it before
                 speciationnode = Phylo.BaseTree.TreeMixin.common_ancestor(species_tree, [i[0], i[1]])  # get the node on the species tree
                 try:
-                    speciation_dic[str(speciationnode)].append(ancestor) # You have a speciation node, associate with it the particular ancestral protein that species had
+                    speciation_dic[str(speciationnode)].append(ancestor)  # You have a speciation node, associate with it the particular ancestral protein that species had
                 except KeyError:
                     speciation_dic[str(speciationnode)] = [ancestor]
                 LCAs.append(ancestor)
@@ -926,7 +952,7 @@ def find_matched_ancestors(species_dic, species_nodes, species_tree, tree, dupli
 
 
 def sort_out_resolved_nodes_and_species(matched_dic):
-    '''This sorts out the species names from the tree resolution and assocaites names from the resolved tree with nodes from the unresolved tree.'''
+    """This sorts out the species names from the tree resolution and assocaites names from the resolved tree with nodes from the unresolved tree. Maybe."""
     resolve_dic = make_resolve_dic()
     node_dict = match_nodes(resolve_dic)
     mapping = {}
@@ -947,69 +973,8 @@ def sort_out_resolved_nodes_and_species(matched_dic):
     return matched_dic, mapping
 
 
-def match_order(old_order, new_interactions, tree, tips, nodes, duplication_nodes, mapping):
-    # The problem is that in the dictionary the node numbers are according to the normal tree, but I need to use the resolution tree. So I need that inverted dictionary
-    new_set = set([])
-    inverse_resolve_dic = make_inverse_resolve_dic()
-
-    new_order = []
-    tipno = len(Phylo.BaseTree.TreeMixin.get_terminals(tree)) + 1
-    for i in new_interactions:
-        new_set.update(list(i))
-    print(old_order, list(new_set))
-    for i in old_order:
-        for j in list(new_set):
-            species_loss = False
-            if i.isdigit() and i in mapping.keys():
-                node1 = nodes[int(mapping[i]) - tipno]
-            elif i[:-1].isdigit:
-                node1 = nodes[int(i[:-1]) - tipno]
-            if j.isdigit() and j in mapping.keys():
-                node2 = nodes[int(mapping[j]) - tipno]
-            elif j[:-1].isdigit():
-                node2 = nodes[int(j[:-1]) - tipno]
-            elif j in mapping.keys():
-                node2 = mapping[j]
-            else:
-                species_loss = True
-            if species_loss == False and Phylo.BaseTree.TreeMixin.common_ancestor(tree, [node1,
-                                                                                         node2]) not in duplication_nodes:  # If they are orthologs This is wrong because 172 is not the right number for the root
-                new_order.append(j)
-
-    # #this whole loop of cinditionals is necessary justto deal with the bullshit names
-    #                 try:
-    #                     if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(mapping[i])-tipno],nodes[int(mapping[j])-tipno]]) not in duplication_nodes: # If they are orthologs This is wrong because 172 is not the right number for the root
-    #                         new_order.append(j)
-    #                 except ValueError:
-    #                         if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(mapping[i])-tipno],mapping[j]]) not in duplication_nodes: # If they are orthologs This is wrong because 172 is not the right number for the root
-    #                             new_order.append(j)
-    #
-    #                 except KeyError:
-    #                     try:
-    #                         if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(i[:-1])-tipno],nodes[int(mapping[j])-tipno]]) not in duplication_nodes:
-    #                             new_order.append(j)
-    #
-    #                     except ValueError:
-    #                         if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(mapping[i])-tipno],mapping[j]]) not in duplication_nodes: # If they are orthologs This is wrong because 172 is not the right number for the root
-    #                             new_order.append(j)
-    #                     except KeyError:
-    #                         try:
-    #                             if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(mapping[i])-tipno],nodes[int(j[:-1])-tipno]]) not in duplication_nodes:
-    #                                 new_order.append(j)
-    #
-    #                         except ValueError:
-    #                             if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(mapping[i])-tipno],j]) not in duplication_nodes: # If they are orthologs This is wrong because 172 is not the right number for the root
-    #                                 new_order.append(j)
-    #                         except KeyError:
-    #                             if Phylo.BaseTree.TreeMixin.common_ancestor(tree, [nodes[int(i[:-1])-tipno],nodes[int(j[:-1])-tipno]]) not in duplication_nodes:
-    #                                 new_order.append(j)
-
-    if len(new_order) != len(new_set):
-        print('shit')
-    return new_order
-
-def to_gene_rec_form(clade, tips1):
-    types = ['VBP', 'HLF', 'HLF_', 'HLF_insects',  'TEF', 'E4BP4', 'DBP', 'PAR', 'Par1', 'Par2', 'New', 'Weird'] #order of the list matters because I'm a bad programmer. Big
+def to_gene_rec_form(clade):
+    types = ['VBP', 'HLF', 'HLF_', 'HLF_insects',  'TEF', 'E4BP4', 'DBP', 'PAR', 'Par1', 'Par2', 'New', 'Weird']  # order of the list matters because I'm a bad programmer. Big
     lastnum = clade[-1:]
     islastnum = False
     thistype = ""
@@ -1023,14 +988,9 @@ def to_gene_rec_form(clade, tips1):
         newname = clade[len(thistype):-1] + thistype + lastnum
     elif thistype == 'HLF_':
         thistype = 'HLF'
-        newname = clade[(len(thistype) +1):] + thistype #I have no idea why this is necessary but the name of daphnia pulex between the systems needs it
+        newname = clade[(len(thistype) + 1):] + thistype  # I have no idea why this is necessary but the name of daphnia pulex between the systems needs it
     else:
         newname = clade[len(thistype):] + thistype
-
-    # if str(newname) in tips1:
-    #     print("New clade name, ", newname, " is in tips1")
-    # else:
-    #     print("New clade name, ", newname, " is not in tips1")
     return newname
 
 
@@ -1041,38 +1001,53 @@ def order_lookup(list_of_proteins_to_plot, order_list):
     node_set = set()
     for i in list_of_proteins_to_plot:
         for j in list(i):
+            if 'LOST' in str(j):
+                j = j.replace('LOST', '')
             node_set.add(j)
     for i in node_set:
-        #newi = to_gene_rec_form(i, tips1)
-        position = 0
+        # position = -1
         zpos = 1
         terms, ints = [], []
-        node_loc = tree.find_clades(name = str(i))
-        for clade in node_loc:
-            if clade.is_terminal():
-                clade = to_gene_rec_form(str(clade), tips1)
-                terms.append(clade)
+        node_loc = i
+        if type(i) is str and i[0] == 'r':
+            pass
+        else:
+            if not isinstance(i, Phylo.BaseTree.Clade) and i[0] != 'r':
+                node_loc = list(tree.find_clades(name = str(i)))[0]
+            if node_loc.is_terminal():
+                node_loc = to_gene_rec_form(str(node_loc))
+                terms.append(node_loc)
+            else:
+                termspretree = node_loc.get_terminals()
+                for clade in termspretree:
+                    clade = to_gene_rec_form(str(clade))
+                    terms.append(clade)
         if len(terms) > 1:
             new_clade = Phylo.BaseTree.TreeMixin.common_ancestor(tree1,[str(i) for i in terms])
         elif len(terms) == 1:
             new_clade = terms[0]
+        elif len(terms) == 0 and i[0] == 'r':
+            new_clade = i
         else:
             print("shit, we got no clades")
-        try:
-            trace = Phylo.BaseTree.TreeMixin.trace(tree1, nodes1[0], str(new_clade))
-        except ValueError:
-            print("new clade, named ", new_clade, " was not in tree")
 
+        trace = Phylo.BaseTree.TreeMixin.trace(tree1, nodes1[0], str(new_clade))
         trace = [str(j) for j in trace]
         ints = intersection(trace, order_list)
+        # if len(ints) == 1:
+        #     position = order_list.index(ints[0])
+        #     for j in trace[trace.index(ints[0]):trace.index(str(new_clade))+1]:
+        #         loc_clade = list(tree1.find_clades(name = j))[0]
+        #         if len(loc_clade.clades) > 0 and str(loc_clade.clades[1]) in trace:
+        #             zpos +=1
+        #     new_loptp.append([i, position, zpos])
+
         if len(ints) == 1:
             position = order_list.index(ints[0])
             for j in new_loptp:
                 if j[1] == position:
                     zpos += 1
             new_loptp.append([i, position, zpos])
-        else:
-            print("length of ints wrong ", ints)
     return new_loptp
 
 
@@ -1104,10 +1079,10 @@ def add_loss_nodes(matched_dic):
     return matched_dic
 
 
-def circle(node, matched_dic, coor, size, ax, order_list, data_dic, treenodes, inferred = False):
+def circle(node, matched_dic, coor, size, ax, order_list, data_dic, treenodes):
     stretch = 0.4
     ext_x, ext_y = size
-    scale = 0.018
+    scale = 0.010
     x, y = coor
     node_set = set([])
     # for i in matched_dic[node]:
@@ -1123,15 +1098,12 @@ def circle(node, matched_dic, coor, size, ax, order_list, data_dic, treenodes, i
                 j = j.lower()
             node_set.add(j)
 
-    # if len(order) > 1:
-    #     node_list = order
-    # else:
-    if inferred:
-        ax.scatter(coor[0], coor[1], color='tan', zorder=10, s=8, edgecolors='black')
-        return
+
     node_list = list(node_set)
     for i in order_list:
-        i[0] = i[0].lower()
+        if type(i[0]) is str:
+            i[0] = i[0].lower()
+
     if len(node_list) > 0:
         #angle = 360.0 / len(node_list)
         # xs = [np.cos(math.radians(i * angle)) * scale * ext_x + x for i in range(len(node_list))]
@@ -1140,49 +1112,75 @@ def circle(node, matched_dic, coor, size, ax, order_list, data_dic, treenodes, i
         xs = [np.cos(math.radians(i * angle)) * scale * ext_x + x for i in range(5)]
         ys = [np.sin(math.radians(i * angle)) * scale * ext_y * stretch + y for i in range(5)]
 
+        #make hexagon outlines
+        if order_list:
+            numhexs = max(order_list, key=lambda x: x[2])
+            xlevs, ylevs = [], []
+            for j in range(numhexs[2]):
+                xlev1, ylev1 = [], []
+                for i in range(len(xs)):
+                    xlev1.append(xs[i] + (xs[i] - x)*(j+1))
+                    ylev1.append(ys[i] + (ys[i] - y)*(j+1))
+                xlev1.append(xs[0] + (xs[0] - x)*(j+1))
+                ylev1.append(ys[0] + (ys[0] - y)*(j+1))
+                xlevs.append(xlev1)
+                ylevs.append(ylev1)
+            for j in range(len(xlevs)):
+                ax.plot(xlevs[j], ylevs[j], color = 'grey', alpha =0.4, zorder = 2)
+
         cols = []
         colnams = []
-        xpoints = []
-        ypoints = []
-        #for i in node_list
-        plottedpoints = []
+        xpoints, ypoints = [], []
         for i in order_list:
-            i[0] = i[0].lower()
             xpoints.append(xs[i[1]] + (xs[i[1]] - x )* i[2])
             ypoints.append(ys[i[1]] + (ys[i[1]] - y )* i[2])
-            nam = convert_single_species_node_to_data_dic(i[0], matched_dic, treenodes)
-            colnams.append([str(nam), xs[i[1]] * i[2], ys[i[1]] * i[2]])
+            nam = convert_single_species_node_to_data_dic(i[0], treenodes)
+            colnams.append([str(nam), xs[i[1]] + (xs[i[1]] - x) * i[2], ys[i[1]] + (ys[i[1]] - y ) * i[2]])
             try:
                 if data_dic[frozenset([i[0]])] == 1:
-                    cols.append(cm.viridis(0.85))
-
+                    cols.append((255/256, 49/256, 49/256, 1))#hexcodes for colors. This is red.
                 elif data_dic[frozenset([i[0]])] == 0:
-                    cols.append(cm.viridis(0.15))
-                else:
-                    cols.append(cm.Reds(1.0))
+                    cols.append((0,145/256,244/256,1))
             except KeyError:
-                if "lost" in i[0]:
-                    cols.append((210/256,180/256, 140/256, 1)) #this is just the normalized hex code for tan
+                if i[0][:2] == 'r7': #yes this should be more clear that its a LOST node but i deleted that earlier and they do all start with r7
+                    cols.append((1,0.75,0,1))
                 else:
                     cols.append(cm.Greys(0.5))
-            if i[2] > 1:
-                print("here")
         ax.scatter(xpoints, ypoints, color=cols, s=8, zorder=10, edgecolors='black')
         for j in range(len(colnams)):
             if str(colnams[j][0]).isdigit() and int(colnams[j][0]) > 170 and int(colnams[j][0]) < 177:
                 ax.text(colnams[j][1]+0.2, colnams[j][2] -0.33, s = colnams[j][0], fontsize=10, color = "red")
             else:
-                print("text being printed ", colnams[j], " num cols = ", len(colnams))
+                #print("text being printed ", colnams[j], " num cols = ", len(colnams))
                 ax.text(colnams[j][1]+0.2, colnams[j][2] -0.33, s = colnams[j][0], fontsize=5)
         # Draw lines between the nodes all the nodes colored by whether there is an interaction or not
         for c, d in itertools.combinations(range(len(order_list)), 2):
+            co_x = [xs[order_list[c][1]] + (xs[order_list[c][1]] - x) * order_list[c][2], xs[order_list[d][1]] + (xs[order_list[d][1]] - x) * order_list[d][2]]
+            co_y = [ys[order_list[c][1]] + (ys[order_list[c][1]] - y) * order_list[c][2], ys[order_list[d][1]] + (ys[order_list[d][1]] - y) * order_list[d][2]]
             try:
-                if data_dic[frozenset([order_list[c][0], order_list[d][0]])] == 1.0:
-                    ax.plot([xs[order_list[c][1]], xs[order_list[d][1]]], [ys[order_list[c][1]], ys[order_list[d][1]]], color=cm.viridis(0.85), zorder=1)
-                elif data_dic[frozenset([order_list[c][0], order_list[d][0]])] == 0.5:
-                    ax.plot([xs[order_list[c][1]], xs[order_list[d][1]]], [ys[order_list[c][1]], ys[order_list[d][1]]], color=cm.viridis(0.5), zorder=1)
-                elif data_dic[frozenset([order_list[c][0], order_list[d][0]])] == 0.0:
-                    ax.plot([xs[order_list[c][1]], xs[order_list[d][1]]], [ys[order_list[c][1]], ys[order_list[d][1]]], color=cm.viridis(0.15), zorder=1)
+                if not ((order_list[c][1] == order_list[d][1]) and abs(order_list[c][2] - order_list[d][2]) > 1):
+                    # forgive me god
+                    if data_dic[frozenset([order_list[c][0], order_list[d][0]])] == 1.0:
+                        ax.plot(co_x, co_y, color=(255/256, 49/256, 49/256, 1), zorder=3)
+                    elif data_dic[frozenset([order_list[c][0], order_list[d][0]])] == 0.5:
+                        ax.plot(co_x, co_y, color=(196/256, 0, 237/256,1), zorder=3)
+                    elif data_dic[frozenset([order_list[c][0], order_list[d][0]])] == 0.0:
+                        ax.plot(co_x, co_y, color=(0,145/256,244/256,1), zorder=3)
+                else:
+                    try:
+                        xarc, yarc = parabola([co_x[0],co_y[0]], [co_x[1], co_y[1]])
+                        if data_dic[frozenset([order_list[c][0], order_list[d][0]])] == 1.0:
+                            arccol = (255/256, 49/256, 49/256, 1)
+                        elif data_dic[frozenset([order_list[c][0], order_list[d][0]])] == 0.5:
+                            arccol = (196/256, 0, 237/256,1)
+                        elif data_dic[frozenset([order_list[c][0], order_list[d][0]])] == 0.0:
+                            arccol = (0,145/256,244/256,1)
+                        else:
+                            arccol = (0,1,0,1)
+                        ax.plot(xarc, yarc, color=arccol, alpha=1, zorder=4)
+                    except:
+                        print("something in the parabolas went poorly")
+
             except KeyError:
                 pass
         xleft, xright = ax.get_xlim()
@@ -1193,7 +1191,10 @@ def circle(node, matched_dic, coor, size, ax, order_list, data_dic, treenodes, i
     else:
         try:
             val = data_dic[frozenset([str(node).lower()])]
-            ax.scatter(coor[0], coor[1],  color=cm.viridis(abs(val - 0.15)),zorder = 10, s=8, edgecolors='black')
+            if val == 1.0:
+                ax.scatter(coor[0], coor[1],  color=(255/256, 49/256, 49/256, 1),zorder = 10, s=8, edgecolors='black')
+            elif val == 0.0:
+                ax.scatter(coor[0], coor[1], color=(0, 145 / 256, 244 / 256, 1), zorder=10, s=8, edgecolors='black')
         except KeyError:
             pass
 
@@ -1251,13 +1252,18 @@ def plot_species_interactions(species_coordinates, matched_dic, ax, species_tree
             terms = j.get_terminals()
             tree1terms = []
             for k in terms:
-                clade = to_gene_rec_form(str(k), tips1)
+                clade = to_gene_rec_form(str(k))
                 tree1terms.append(clade)
             j = Phylo.BaseTree.TreeMixin.common_ancestor(tree1, tree1terms)
             cleanorder_list.append(str(j))
+    cleanorder_list = ['r7443','r7425','n5243','r7408','n5062',]
     for i in matched_dic.keys():
         #if len(matched_dic[i]) > 0:
         neworder = order_lookup(matched_dic[i], cleanorder_list)
+        # for x in neworder:
+        #     [x[1] for x in neworder]
+        # if len(set([x[2] for [x[1] for x in neworder] in neworder])) != len([x[2] for x in neworder]):
+        #     print("fuck")
         coor = species_coordinates[str(i)]
         try:
             circle(i, matched_dic, coor, [ext_x + 1, ext_y + 1], ax, neworder, data_dic, tree_nodes)
@@ -1354,7 +1360,7 @@ if __name__ == "__main__":
     species_tree, species_tips, species_nodes = read_tree('../speciestree_node_names.newick.nwk')  # contains species relationships
     # print("immediate species tree: ", species_tree)
     # print("immediate species tips: ", species_tips)
-    matched_ancestors, matched_dic = find_matched_ancestors(species, species_nodes, species_tree, mytree, myduplication_nodes, mynodes)
+    matched_ancestors, matched_dic = find_matched_ancestors(species, species_tree, mytree, myduplication_nodes)
     exts = find_matched_extant(species)
     #e print("post find_matched species tree: ",species_tree)
     # print("post find_matched species tips: ",species_tips)
@@ -1364,7 +1370,7 @@ if __name__ == "__main__":
     # nonovers = pick_nonoverlap(tree,orthos,tip_dic)
     # neutral_evo(mytree, mydata_dic, mytip_dic, myduplication_nodes)
     species_coordinates = get_species_tip_coordinates(species_tree, species_nodes, species_tips)
-    fig = plt.figure(figsize=(4,8))
+    fig = plt.figure(figsize=(10,25))
     ax = fig.add_subplot(111)
     #matched_dic, mapping = sort_out_resolved_nodes_and_species(matched_dic)
     matched_dic = add_loss_nodes(matched_dic)
