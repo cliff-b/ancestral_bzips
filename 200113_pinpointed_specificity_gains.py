@@ -3,8 +3,9 @@ from Bio.Phylo import BaseTree
 import numpy as np
 import itertools
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 from scipy.interpolate import CubicSpline
-import matplotlib.colors as cm
+from matplotlib import cm
 import random
 
 
@@ -64,6 +65,20 @@ def load_experiment(filename):
     return data_dic
 
 
+def clade_object_to_readable(clade, tree):
+    """Takes a clade object and turns it into a human readable number or leaves it as a string
+    Takes:
+        clade: a clade object
+        tree: the tree it came from, presumably the gene tree we're using here.
+    Returns:
+        a string of the clade
+        """
+    if type(clade.name) is str:
+        return clade.name
+    else:
+        return str(tree.get_nonterminals().index(clade) + 172)
+
+
 def find_duplication_nodes(tree, duplication_file):
     """function to read in a list of extant proteins with a duplicated ancestor
     list is of form 'pep1,pep2', function locates the last common ancestor on the tree
@@ -86,6 +101,61 @@ def find_duplication_nodes(tree, duplication_file):
         i = i.lower()
         duplication_nodes.append(Phylo.BaseTree.TreeMixin.common_ancestor(tree, [i.split(',')[0], i.split(',')[1]]))
     return duplication_nodes
+
+
+def get_descendants(tree, node, includeself=False):
+    """Gets all the descendants of a node and returns them as a list
+    Takes:
+        tree: a tree object that the node is from
+        node: a clade object that is the node that we want the descendants of
+        includeself: boolean, if true the node will be included in the list of descendants
+    Returns:
+        descendants: a list of clade objects that are the descentants of a node"""
+    descendants = []
+    nodetips = node.get_terminals()
+    for i in nodetips:
+        trace = Phylo.BaseTree.TreeMixin.trace(tree, node, i)
+        for j in trace[1:]:
+            if j not in descendants:
+                descendants.append(j)
+    if includeself:
+        descendants.append(node)
+    return descendants
+
+
+def specificity_after_duplication(tree, data_dic, duplication_nodes):
+    """"""
+    duplengths = {}
+    for i in duplication_nodes:
+        try:
+            mindist = 100
+            minpath = ''
+            if data_dic[frozenset([i])] == 1.0:
+                descendants = get_descendants(tree, i)
+                for j in list(itertools.combinations(descendants, 2)):
+                    if not any(x in Phylo.BaseTree.TreeMixin.trace(tree, i, j[1])[1:] for x in Phylo.BaseTree.TreeMixin.trace(tree, i, j[0])[1:]):  # make sure they're not part of the same lineage
+                        try:
+                            if data_dic[frozenset([j[0], j[1]])] == 0.0:
+                                curdist = Phylo.BaseTree.TreeMixin.distance(tree, j[0], j[1])
+                                if curdist < mindist:
+                                    mindist = curdist
+                                    minpath = Phylo.BaseTree.TreeMixin.trace(tree, j[0], j[1])
+                                    minpath.insert(0, j[0])
+                        except KeyError:
+                            pass
+                            #  print("bad pair", clade_object_to_readable(j[0], tree),"  ", clade_object_to_readable(j[1], tree))
+            else:
+                print(clade_object_to_readable(i, tree), " was not found a homodimer")
+            duplengths[i] = [mindist, minpath]
+        except KeyError:
+            print(i, " was not in data_dic")
+    print("pause momento")
+    intscores = []
+    # [[frozenset([clade_object1, clade_object2]), ancestral_clade], interaction_score, distance]
+    for i in duplengths:
+        if duplengths[i][0] != 100:
+            intscores.append([[frozenset([duplengths[i][1][0], duplengths[i][1][-1]]), i], 0.0, duplengths[i][0]])
+    return duplengths, intscores
 
 
 def get_tree_coordinates(tree, nodes, tips, cladogram=False):
@@ -177,12 +247,12 @@ def draw_tree(input_tree, nodes, tips, coordinates, subfig, labtype):
         for j in trace:
             if j in tips:
                 coordinate2 = coordinates[j]
-                labs = clade_labels(j, labtype, False, input_tree)
-                subfig.text(coordinate2[0] + 1.5, coordinate2[1] - 0.33, labs, fontsize=5)
+                # labs = clade_labels(j, labtype, False, input_tree)
+                # subfig.text(coordinate2[0] + 1.5, coordinate2[1] - 0.33, labs, fontsize=5)
             else:
                 coordinate2 = coordinates[j]
-                labs = clade_labels(j, labtype, True, input_tree)
-                subfig.text(coordinate2[0] + .25, coordinate2[1], labs, fontsize=5)
+                # labs = clade_labels(j, labtype, True, input_tree)
+                # subfig.text(coordinate2[0] + .25, coordinate2[1], labs, fontsize=5)
             if frozenset([frozenset(coordinate1), frozenset(coordinate2)]) not in exclude:
                 subfig.plot([coordinate1[0], coordinate1[0]], [coordinate1[1], coordinate2[1]], color=col, zorder=1)
                 subfig.plot([coordinate1[0], coordinate2[0]], [coordinate2[1], coordinate2[1]], color=col, zorder=1)
@@ -334,15 +404,13 @@ def paralog_ancestors(matched_dic, gene_tree):
         gene_tree: phylo.basetree object of the gene relation tree
     Returns:
         paralog_anc_list: a list containing a frozenset of proteins and their LCA"""
-    paralog_anc_list = []
+    paralog_anc_dic = {}
     for i in matched_dic:
         for j in matched_dic[i]:
             if len(j) > 1:
                 lca = Phylo.BaseTree.TreeMixin.common_ancestor(gene_tree, [list(j)[0], list(j)[1]])
-                paralog_anc = [frozenset([list(j)[0], list(j)[1]]), lca]
-                if paralog_anc not in paralog_anc_list:
-                    paralog_anc_list.append(paralog_anc)
-    return paralog_anc_list
+                paralog_anc_dic[j] = {'ancestor': frozenset([lca])}
+    return paralog_anc_dic
 
 
 def paralog_timing(paralog_anc_list, data_dic, tree):
@@ -353,21 +421,31 @@ def paralog_timing(paralog_anc_list, data_dic, tree):
         tree: the gene tree
     Returns:
         intscorelist: a list that has built on paralog_anc_list to be [frozenset([protein paralogs]), ancestral protein, interaction score, distance between paralogs]"""
-    intscorelist = []
     for i in paralog_anc_list:
-        protein1, protein2 = list(i[0])[0], list(i[0])[1]
+        protein1, protein2 = list(i)
         try:
-            if data_dic[frozenset([i[1]])] == 1:  # and data_dic[frozenset([protein1])] == 1 and data_dic[frozenset([protein2])] == 1:
+            if data_dic[paralog_anc_list[i]['ancestor']] == 1:  # and data_dic[frozenset([protein1])] == 1 and data_dic[frozenset([protein2])] == 1:
                 distance = Phylo.BaseTree.TreeMixin.distance(tree, protein1, protein2)
-                if type(protein1) is str:
-                    protein1 = protein1.lower()
-                if type(protein2) is str:
-                    protein2 = protein2.lower()
-                intscore = data_dic[frozenset([protein1, protein2])]
-                intscorelist.append([i, intscore, distance])
+                paralog_anc_list[i]['int_score'] = data_dic[i]
+                paralog_anc_list[i]['distance'] = distance
         except KeyError:
-            print("Key ", i[1], " parent of ", list(i[0]), " was not in data dic.")
-    print(len(intscorelist), " intscorelength and paralog_anc_listlength ", len(paralog_anc_list))
+            print("Key ", clade_object_to_readable(list(paralog_anc_list[i]['ancestor'])[0], tree), " parent of ", list(i), " was not in data dic.")
+    print("Number of things in paralog_anc_list ", len(paralog_anc_list))
+    return paralog_anc_list
+
+
+def just_get_homos(data_dic, tree):
+    intscorelist = []
+    for i in tree.get_terminals():  # this is really dumb but there's not an obvious way to interate through the entire tree.
+        try:
+            intscorelist.append([[frozenset([i]), 0], data_dic[frozenset([i])], 0])
+        except KeyError:
+            intscorelist.append([[frozenset([i]), 0], -1, 0])
+    for i in tree.get_nonterminals():
+        try:
+            intscorelist.append([[frozenset([i]), 0], data_dic[frozenset([i])], 0])
+        except KeyError:
+            intscorelist.append([[frozenset([i]), 0], -1, 0])
     return intscorelist
 
 
@@ -390,7 +468,7 @@ def info_on_specificity_gains(intscores):
     print("Of the ", len(distances), " distances, the shortest was ", min(distances), " the longest was ", max(distances), " and the average was ", np.mean(distances))
 
 
-def plot_specificity(intscores, tree, coors, ax):
+def plot_specificity(intscores, tree, coors, ax, descendscores, data_dic):
     """
     Draws interactions as parabolas between points or as points on a tree to in the color of their interaction
     Takes:
@@ -401,22 +479,49 @@ def plot_specificity(intscores, tree, coors, ax):
     Returns:
         Nothing
     """
-    arccol = {1.0: (255 / 256, 49 / 256, 49 / 256, 1), 0.5: (196 / 256, 0, 237 / 256, 1), 0.0: (0, 145 / 256, 244 / 256, 1)}
+    arccol = {1.0: (255 / 256, 49 / 256, 49 / 256, 1), 0.5: (196 / 256, 0, 237 / 256, 1), 0.0: (0, 145 / 256, 244 / 256, 1), -1.0: (0.5, 0.5, 0.5, 1)}
     for i in intscores:
-        if len(i[0][0]) > 1:
+        if len(i) > 1:
             try:
-                cox1, coy1 = coors[list(tree.find_clades(list(i[0][0])[0]))[0]]  # I'm really sorry but I need the clade object.
-                cox2, coy2 = coors[list(tree.find_clades(list(i[0][0])[1]))[0]]
+                cox1, coy1 = coors[list(i)[0]]  # I'm really sorry but I need the clade object.
+                cox2, coy2 = coors[list(i)[1]]
                 xarc, yarc = parabola([cox1, coy1], [cox2, coy2], .25)
-                ax.plot(xarc, yarc, color=arccol[i[1]], alpha=0.4, zorder=4)
-            except KeyError:
+                ax.plot(xarc, yarc, color=arccol[intscores[i]['int_score']], alpha=0.4, zorder=4)
+            except:
                 print("couldn't find", i[0][0], "in coordic")
         else:
             try:
-                cox, coy = coors[list(i[0][0])[0]]
-                ax.scatter(cox, coy, color=arccol[i[1]], s=12, zorder=10, edgecolor='black')
-            except KeyError:
+                cox, coy = coors[list(i)[0]]
+                ax.scatter(cox, coy, color=arccol[intscores[i]['int_score']], s=12, zorder=5, edgecolor='black')
+            except:
                 pass
+            # try:
+            #     cox, coy = coors[list(i[0][0])[1]]
+            #     ax.scatter(cox, coy, color=arccol[data_dic[frozenset([list(i[0][0])[1]])]], s=12, zorder=3, edgecolor='black')
+            # except KeyError:
+            #     pass
+    # for i in intscores:
+    #     if len(i[0][0]) == 1:
+    #         circ1 =  patches.Ellipse(coors[list(i[0][0])[0]], width = 0.25, height= 3, fill = False, edgecolor = 'Blue', linewidth = 2, zorder = 1)
+    #         ax.add_patch(circ1)
+    #         break
+    # circ2 =  patches.Ellipse(coors[list(intscores[-1][0][0])[0]], width = 0.25, height= 3, fill = False, edgecolor = 'Blue', linewidth = 2, zorder = 1)
+    # ax.add_patch(circ2)
+    # for i in descendscores:
+    #     if len(i[0][0]) > 1:
+    #         try:
+    #             cox1, coy1 = coors[list(tree.find_clades(list(i[0][0])[0]))[0]]  # I'm really sorry but I need the clade object.
+    #             cox2, coy2 = coors[list(tree.find_clades(list(i[0][0])[1]))[0]]
+    #             xarc, yarc = parabola([cox1, coy1], [cox2, coy2], .25)
+    #             ax.plot(xarc, yarc, color=arccol[i[1]], alpha=0.4, zorder=4)
+    #         except KeyError:
+    #             print("couldn't find", i[0][0], "in coordic")
+    #     else:
+    #         try:
+    #             cox, coy = coors[list(i[0][0])[0]]
+    #             ax.scatter(cox, coy, color=arccol[i[1]], s=12, zorder=10, edgecolor='black')
+    #         except KeyError:
+    #             pass
     return
 
 
@@ -431,30 +536,32 @@ def plot_specificity_rects(tree, coors, ax, intscores):
     Returns:
         Nothing
     """
+
     coldots = [cm.jet(x / len(intscores)) for x in range(len(intscores))]
+    linecol = (35/256, 138/256, 141/256, 1)
     random.shuffle(coldots)
     for c, i in enumerate(intscores):
-        coordinate1 = coors[list(tree.find_clades(list(i[0][0])[0]))[0]]
+        coordinate1 = coors[list(i)[0]]
         ax.scatter(coordinate1[0], coordinate1[1] + random.randrange(0, 10)/10, color=coldots[c], s=28, zorder=10, edgecolors='black')
         passed_lca = False
-        for j in Phylo.BaseTree.TreeMixin.trace(tree, list(tree.find_clades(list(i[0][0])[0]))[0], list(tree.find_clades(list(i[0][0])[1]))[0]):  # I'm so sorry, but I don't have a better way of getting clade objects
+        for j in Phylo.BaseTree.TreeMixin.trace(tree, list(i)[0], list(i)[1]):
             if passed_lca:
                 coordinate2 = coors[j]
-                ax.plot([coordinate1[0], coordinate2[0]], [coordinate2[1], coordinate2[1]], alpha=0.4, color=(35/256, 138/256, 141/256, 1), zorder=1, linewidth=6)
-                ax.plot([coordinate1[0], coordinate1[0]], [coordinate1[1], coordinate2[1]], alpha=0.4, color=(35/256, 138/256, 141/256, 1), zorder=1, linewidth=6)
+                ax.plot([coordinate1[0], coordinate2[0]], [coordinate2[1], coordinate2[1]], alpha=0.4, color=coldots[c], zorder=1, linewidth=6)
+                ax.plot([coordinate1[0], coordinate1[0]], [coordinate1[1], coordinate2[1]], alpha=0.4, color=coldots[c], zorder=1, linewidth=6)
                 coordinate1 = coordinate2
             else:
                 coordinate2 = coors[j]
-                ax.plot([coordinate2[0], coordinate2[0]], [coordinate1[1], coordinate2[1]], alpha=0.4, color=(35/256, 138/256, 141/256, 1), zorder=1, linewidth=6)
-                ax.plot([coordinate1[0], coordinate2[0]], [coordinate1[1], coordinate1[1]], alpha=0.4, color=(35/256, 138/256, 141/256, 1), zorder=1, linewidth=6)
+                ax.plot([coordinate2[0], coordinate2[0]], [coordinate1[1], coordinate2[1]], alpha=0.4, color=coldots[c], zorder=1, linewidth=6)
+                ax.plot([coordinate1[0], coordinate2[0]], [coordinate1[1], coordinate1[1]], alpha=0.4, color=coldots[c], zorder=1, linewidth=6)
                 coordinate1 = coordinate2
-            if Phylo.BaseTree.TreeMixin.common_ancestor(tree, list(tree.find_clades(list(i[0][0])[0]))[0], list(tree.find_clades(list(i[0][0])[1]))[0]) == j:
+            if Phylo.BaseTree.TreeMixin.common_ancestor(tree, list(i)[0], list(i)[1]) == j:
                 passed_lca = True
-        ax.scatter(coordinate1[0], coordinate1[1] + random.randrange(0, 10)/10, color=coldots[c], s=28, zorder=10, edgecolors='black')
+        ax.scatter(coordinate1[0], coordinate1[1], color=coldots[c], s=28, zorder=10, edgecolors='black')
     return
 
 
-def all_paralog_plot_wrapper(tree, nodes, tips, coors, intscores, filename):
+def all_paralog_plot_wrapper(tree, nodes, tips, coors, intscores, filename, descendscores=[], data_dic=[], rects=True):
     """Wrapper function to plot an interaction tree
     Takes:
         tree: a tree object this should be plotted on
@@ -466,38 +573,74 @@ def all_paralog_plot_wrapper(tree, nodes, tips, coors, intscores, filename):
     Returns:
         Nothing
     """
-    fig = plt.figure(figsize=(40, 18))
+    fig = plt.figure(figsize=(18, 18))
     ax = fig.add_subplot(111)
     draw_tree(tree, nodes, tips, coors, ax, "gene")
-    plot_specificity(intscores, tree, coors, ax)
-    # plot_specificity_rects(tree, coors, ax, intscores)
+    #plot_specificity(intscores, tree, coors, ax, descendscores, data_dic)
+    if rects:
+        plot_specificity_rects(tree, coors, ax, intscores)
+    else:
+        plot_specificity(intscores, tree, coors, ax, descendscores, data_dic)
     xleft, xright = ax.get_xlim()
     ybottom, ytop = ax.get_ylim()
     ratio = 2.5
-    ax.set_aspect(abs((xright - xleft) / (ybottom - ytop)) * ratio)
+    #ax.set_aspect(abs((xright - xleft) / (ybottom - ytop)) * ratio)
     ax.set_axis_off()
     figure = plt.gcf()
     figure.savefig(filename, figsize=(100, 30))
+    plt.close()
     # plt.show()
     return
 
+def dupes_intscores(node, tree, data_dic):
+    nlist = get_descendants(tree, node, True)
+    nodescore = []
+    for i in list(itertools.combinations(nlist, 2)):
+        try:
+            score =  data_dic[frozenset([i[0], i[1]])]
+            dist = Phylo.BaseTree.TreeMixin.distance(tree, i[0], i[1])
+            intsc = [[frozenset([i[0], i[1]]), node], score, dist]
+            nodescore.append(intsc)
+        except KeyError:
+            pass
+    for i in nlist:
+        try:
+            score =  data_dic[frozenset([i])]
+            intsc = [[frozenset([i]), node], score, 0.0]
+            nodescore.append(intsc)
+        except KeyError:
+            pass
+    return nodescore
 
-def basal_paralog_int_loss(intscores, tree):
-    """Takes the intscores list and finds the two paralogs that are most closely related to the ancestor node for each andestral node and trims the intscores list to just those
+def calc_avg_dist(clade, tree):
+    dists = []
+    desc = Phylo.BaseTree.TreeMixin.get_terminals(clade)
+    for term in desc:
+        d = Phylo.BaseTree.TreeMixin.distance(tree, clade, term)
+        dists.append(d)
+    return np.mean(dists)
+
+
+
+
+
+def basal_paralog_int_loss(intscores, tree, score_for_loss=0):
+    """Takes the intscores list and finds the two paralogs that are most closely related to the ancestor node for each ancestral node and trims the intscores list to just those
     Takes:
         intscores: a dumb list of lists situation. [[frozenset([clade_object1, clade_object2]), ancestral_clade], interaction_score, distance]
         tree: the tree object that this occurred on
     Returns:
         trimmedscores: a dumb list of lists situation. [[frozenset([clade_object1, clade_object2]), ancestral_clade], interaction_score, distance]
     """
-    trimmedscores = []
+    trimmedscores = {}
     ancestor_dic = {}
     for i in intscores:
-        if i[1] == 0.0:
-            if i[0][1] not in ancestor_dic:
-                ancestor_dic[i[0][1]] = [i[0][0]]
-            else:
-                ancestor_dic[i[0][1]].append(i[0][0])
+        if 'int_score' in intscores[i]:
+            if intscores[i]['int_score'] == score_for_loss:
+                if intscores[i]['ancestor'] not in ancestor_dic:
+                    ancestor_dic[intscores[i]['ancestor']] = [i]
+                else:
+                    ancestor_dic[intscores[i]['ancestor']].append(i)
     for i in ancestor_dic:
         mindist = 100
         minpoint = "This should not occur"
@@ -505,10 +648,107 @@ def basal_paralog_int_loss(intscores, tree):
             if Phylo.BaseTree.TreeMixin.distance(tree, list(j)[0], list(j)[1]) < mindist:
                 minpoint = j
                 mindist = Phylo.BaseTree.TreeMixin.distance(tree, list(j)[0], list(j)[1])
-        trimmedscores.append([[minpoint, i], 0.0, mindist])
+        trimmedscores[minpoint] = intscores[minpoint]
+        trimmedscores[minpoint]['mindist'] = mindist
     print("Found ", len(trimmedscores), " paralog pairs that gain specificity")
-    print(trimmedscores)
     return trimmedscores
+
+def write_possible_paralogs(tree, dupe_nodes, trim_score, matched_dic):
+    with open('../200129.2_specgains.csv', 'w') as f:
+        f.write("Dupe_node,distance,num_pars,specific,time,parlist\n")
+        for i in dupe_nodes:
+            dists = []
+            myspec = "No"
+            spectime  = 0
+            leftarm = get_descendants(tree, i.clades[0], includeself=True)
+            rightarm = get_descendants(tree, i.clades[1], includeself=True)
+            perms = [frozenset([x, y]) for x in leftarm for y in rightarm]
+            pars = []
+            matchedvals = [item for sublist in list(matched_dic.values()) for item in sublist]
+            for j in perms:
+                if j in matchedvals:
+                    dist = Phylo.BaseTree.TreeMixin.distance(tree, list(j)[0], list(j)[1])
+                    dists.append(dist)
+                    pars.append(j)
+            if i in [x[0][1] for x in trim_score]:
+                myspec = "Yes"
+                spectime = [x[2] for x in trim_score if x[0][1] == i][0] #wow i'm bad at programming
+            mydist = np.mean(dists)
+            line = clade_object_to_readable(i, tree) + ',' + str(mydist) + ',' + str(len(dists)) + ',' + myspec + ',' + str(spectime) + "," + str([(clade_object_to_readable(list(x)[0], tree), clade_object_to_readable(list(x)[1], tree)) for x in pars]) + '\n'
+            f.write(line)
+        f.close()
+
+
+def write_odds_of_regain(tree, trim_score, matched_dic, data_dict):
+    score_dic = {1.0: "Y", 0.5: "W", 0.0: "N"}
+    alls = []
+    matchedvals = [item for sublist in list(matched_dic.values()) for item in sublist]
+    for i in trim_score:
+        n1 = list(i[0][0])[0]
+        n2 = list(i[0][0])[1]
+        n1desc = get_descendants(tree, n1)
+        n2desc = get_descendants(tree, n2)
+        perms = [frozenset([x, y]) for x in n1desc for y in n2desc]
+        for j in perms:
+            try:
+                score = data_dict[j]
+                all_dist = Phylo.BaseTree.TreeMixin.distance(tree, list(j)[0], list(j)[1])
+                alls.append([clade_object_to_readable(i[0][1], tree), clade_object_to_readable(list(j)[0], tree), clade_object_to_readable(list(j)[1], tree), score, score_dic[score], all_dist, "all_desc"])
+                if j in matchedvals:
+                    alls.append([clade_object_to_readable(i[0][1], tree), clade_object_to_readable(list(j)[0], tree), clade_object_to_readable(list(j)[1], tree), score, score_dic[score], all_dist, "match_desc"])
+            except KeyError:
+                pass
+        trace = Phylo.BaseTree.TreeMixin.trace(tree, n1, n2)
+        trace.insert(0, n1)
+        tracecombsn1 = [frozenset([x, y]) for x in trace for y in n1desc]
+        for j in tracecombsn1:
+            try:
+                score = data_dict[j]
+                all_dist = Phylo.BaseTree.TreeMixin.distance(tree, list(j)[0], list(j)[1])
+                alls.append([clade_object_to_readable(i[0][1], tree), clade_object_to_readable(list(j)[0], tree), clade_object_to_readable(list(j)[1], tree), score, score_dic[score], all_dist, "trace_w_n1desc"])
+            except KeyError:
+                pass
+        tracecombsn2 = [frozenset([x, y]) for x in trace for y in n2desc]
+        for j in tracecombsn2:
+            try:
+                score = data_dict[j]
+                all_dist = Phylo.BaseTree.TreeMixin.distance(tree, list(j)[0], list(j)[1])
+                alls.append([clade_object_to_readable(i[0][1], tree), clade_object_to_readable(list(j)[0], tree), clade_object_to_readable(list(j)[1], tree), score, score_dic[score], all_dist, "trace_w_n2desc"])
+            except KeyError:
+                pass
+    with open('../200129_Regains.csv', 'w') as f:
+        f.write("Dupe_node,X_peptide,Y_peptide,intscore,interaction,distance,int_subdivision\n")
+        for line in alls:
+            f.write(str(line).replace("'","")[1:-1] + '\n')
+    f.close()
+    return
+
+
+def pars_and_ancs(parscores, i, tree, data_dic):
+    parsandanc_onspec =[]
+    trace = Phylo.BaseTree.TreeMixin.trace(tree, list(i[0][0])[0], list(i[0][0])[1])
+    trace.append(list(i[0][0])[0])
+    for j in list(itertools.combinations(trace, 2)):
+        for k in parscores:
+            if frozenset([j[0], j[1]]) == k[0]:
+                intscore = -1
+                try:
+                    intscore = data_dic[k[0]]
+                except:
+                    pass
+                #parsandanc_onspec.append([[k[0], i[0][1]], intscore, 0.0])
+    ancscore1, ancscore2 = -1, -1
+    try:
+        ancscore1 = data_dic[frozenset([list(i[0][0])[0], i[0][1]])]
+    except:
+        pass
+    try:
+        ancscore2 = data_dic[frozenset([list(i[0][0])[1], i[0][1]])]
+    except:
+        pass
+    parsandanc_onspec.append([[frozenset([list(i[0][0])[0], i[0][1]]), i[0][1]], ancscore1, 0.0])
+    parsandanc_onspec.append([[frozenset([list(i[0][0])[1], i[0][1]]), i[0][1]], ancscore2, 0.0])
+    return parsandanc_onspec
 
 
 def write_scores(scores, filename, input_tree):
@@ -522,11 +762,11 @@ def write_scores(scores, filename, input_tree):
     with open(filename, 'w') as f:
         f.write("X_peptide,Y_peptide,ancestor,interaction,distance\n")
         for i in scores:
-            if type(list(i[0][0])[0]) is Phylo.Newick.Clade:
+            if list(i[0][0])[0] not in input_tree.get_terminals():
                 xpep = Phylo.BaseTree.TreeMixin.get_nonterminals(input_tree).index(list(i[0][0])[0]) + 172
             else:
                 xpep = str(list(i[0][0])[0]).lower()
-            if type(list(i[0][0])[1]) is Phylo.Newick.Clade:
+            if list(i[0][0])[1] not in input_tree.get_terminals():
                 ypep = Phylo.BaseTree.TreeMixin.get_nonterminals(input_tree).index(list(i[0][0])[1]) + 172
             else:
                 ypep = str(list(i[0][0])[1]).lower()
@@ -537,33 +777,81 @@ def write_scores(scores, filename, input_tree):
     return
 
 
-def trace_specificity_gain(intscore, tree, nodes, tips, coors, data_dic, count):
-    filename = '../200120_specificity_gains' + str(count) + '.pdf'
-    protein1, protein2 = list(intscore[0][0])[0], list(intscore[0][0])[1]
-    spectrace = []
+def trace_specificity_gain(intscore, tree, nodes, tips, coors, data_dic, count, descendants = False):
+    protein1, protein2 = list(intscore)
+    spectrace, tracedescend = {}, {}
     trace = Phylo.BaseTree.TreeMixin.trace(tree, protein1, protein2)
-    trace.append(list(tree.find_clades(protein1))[0])
+    trace.insert(0, protein1)
     for pair in list(itertools.combinations(trace, 2)):
         try:
             interact = data_dic[frozenset([pair[0], pair[1]])]
-            spectrace.append([[frozenset([pair[0], pair[1]]), 0], interact, 0])
+            spectrace[frozenset([pair[0], pair[1]])] = {'int_score': interact}
         except KeyError:
             pass
     for i in trace:
         try:
             interact = data_dic[frozenset([i])]
-            spectrace.append([[frozenset([i]), 0], interact, 0])
+            spectrace[frozenset([i])] = {'int_score': interact}
         except KeyError:
             try:
                 interact = data_dic[frozenset([str(i).lower()])]
-                spectrace.append([[frozenset([i]), 0], interact, 0])
+                print('odd')
+                spectrace[frozenset([i])] = {'int_score': interact}
             except KeyError:
-                pass
-    all_paralog_plot_wrapper(tree, nodes, tips, coors, spectrace, filename)
+                spectrace[frozenset([i])] = {'int_score': -1}
+    # if descendants:
+    #     para1terms = trace[0].get_terminals()
+    #     para1desc = []
+    #     for term1 in para1terms:
+    #         paratrace = Phylo.BaseTree.TreeMixin.trace(tree, trace[0], term1)
+    #         for clade in paratrace:
+    #             if clade not in para1desc:
+    #                 para1desc.append(clade)
+    #     para2terms = trace[-1].get_terminals()
+    #     para2desc = []
+    #     for term2 in para2terms:
+    #         paratrace2 = Phylo.BaseTree.TreeMixin.trace(tree, trace[-1], term2)
+    #         for clade in paratrace2:
+    #             if clade not in para2desc:
+    #                 para2desc.append(clade)
+    #     for pair in [[x, y] for x in trace for y in para1desc]:
+    #         try:
+    #             interact = data_dic[frozenset([pair[0], pair[1]])]
+    #             tracedescend.append([[frozenset([pair[0], pair[1]]), 0], interact, 0])
+    #         except KeyError:
+    #             pass
+    #     for pair in [[x, y] for x in trace for y in para2desc]:
+    #         try:
+    #             interact = data_dic[frozenset([pair[0], pair[1]])]
+    #             tracedescend.append([[frozenset([pair[0], pair[1]]), 0], interact, 0])
+    #         except KeyError:
+    #             pass
+    #     for i in para1desc:
+    #         try:
+    #             interact = data_dic[frozenset([i])]
+    #             tracedescend.append([[frozenset([i]), 0], interact, 0])
+    #         except KeyError:
+    #             try:
+    #                 interact = data_dic[frozenset([str(i).lower()])]
+    #                 tracedescend.append([[frozenset([i]), 0], interact, 0])
+    #             except KeyError:
+    #                 tracedescend.append([[frozenset([i]), 0], -1, 0])
+    #     for i in para2desc:
+    #         try:
+    #             interact = data_dic[frozenset([i])]
+    #             tracedescend.append([[frozenset([i]), 0], interact, 0])
+    #         except KeyError:
+    #             try:
+    #                 interact = data_dic[frozenset([str(i).lower()])]
+    #                 tracedescend.append([[frozenset([i]), 0], interact, 0])
+    #             except KeyError:
+    #                 tracedescend.append([[frozenset([i]), 0], -1, 0])
+    return spectrace
+    #all_paralog_plot_wrapper(tree, nodes, tips, coors, spectrace, filename, tracedescend, [], False)
 
 
 if __name__ == "__main__":
-    mydata_dic = load_experiment('../190919_medianEA66k-1.csv')
+    mydata_dic = load_experiment('../200120_most_aliases.csv')
     mytree, mytips, mynodes = read_tree('../190918_EA_tree1only.txt')
     myduplication_nodes = find_duplication_nodes(mytree, '../Gene_duplications.txt')
     myspecies = get_species(mytips)
@@ -574,10 +862,131 @@ if __name__ == "__main__":
     myscores = paralog_timing(mypars, mynewdict, mytree)
     mycoors = get_tree_coordinates(mytree, mynodes, mytips)
 
-    info_on_specificity_gains(myscores)
+    #info_on_specificity_gains(myscores)
     mytrimmedscores = basal_paralog_int_loss(myscores, mytree)
-    # write_scores(trimmedscores, "../200113_basal_paralogs_with_specgain.csv", mytree)
-    # all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, trimmedscores, '../200114_basal_specificity_gains.pdf')
+
+    print("pauser")
+    #rectangle paths showing where specificity occurred
+    all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, mytrimmedscores, '../figures/200505_traced_specificity_gains.pdf')
+    #spaghettigrams for each path
+    for mycount, score in enumerate(mytrimmedscores):
+       specs = trace_specificity_gain(score, mytree, mynodes, mytips, mycoors, mynewdict, mycount, descendants=False)
+       all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, specs, str('../figures/200506_traced_specgain' + clade_object_to_readable(list(score)[0], mytree)+ clade_object_to_readable(list(score)[1], mytree) + '.pdf'), [], [], False)
 
     for mycount, score in enumerate(mytrimmedscores):
-        trace_specificity_gain(score, mytree, mynodes, mytips, mycoors, mynewdict, mycount)
+       specs = trace_specificity_gain(score, mytree, mynodes, mytips, mycoors, mynewdict, mycount, descendants=False)
+       parspecs = {}
+       for key in specs:
+           if len(key) == 1 or key in mypars:
+               parspecs[key] = specs[key]
+       all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, parspecs, str('../figures/200506_spaghetti_paralogs' + clade_object_to_readable(list(score)[0], mytree)+ clade_object_to_readable(list(score)[1], mytree) + '.pdf'), [], [], False)
+
+    # plotscores = pars_and_ancs(mypars, mytrimmedscores, mytree, mynewdict)
+    # allints = []
+    # for i in mynewdict:
+    #     allints.append([[i, 'anc'], mynewdict[i], 'dist'])
+    # plotscores = []
+    # for c, i in enumerate(mytrimmedscores):
+    #     plotscores.extend(pars_and_ancs(mypars, i, mytree, mynewdict))
+    #     #all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, plotscores, '../200220_pars_withspecgain'+str(c)+'.pdf', [], [])
+    #
+    # write_scores(plotscores, "200220_anctoregains.csv", mytree)
+
+    #mytrimmedscores = dupes_intscores(myduplication_nodes, mytree, mynewdict)
+    #write_possible_paralogs(mytree, myduplication_nodes, mytrimmedscores, mymatched_dic)
+    #write_odds_of_regain(mytree, mytrimmedscores, mymatched_dic, mynewdict)
+    # altdict = {}
+    # with open('../Altalls.fasta') as f:
+    #     counter = 0
+    #     for line in f:
+    #         name = line.rstrip()
+    #         seq = f.readline().rstrip()
+    #         name = name[1:-6]
+    #         for k in name.split(sep="+"):
+    #             altdict[frozenset([k])] = seq
+    # altdictoclade = convert_data_dic_to_species_names(altdict, mynodes, mytips)
+    #
+    # aliasdic = {}
+    # with open("../sequence_aliases.txt") as f:
+    #     for line in f:
+    #         name, alias = line.rstrip().split()
+    #         for k in alias.split(sep ="+"):
+    #             aliasdic[frozenset([k])] = name
+    #
+    # nodedict = {}
+    # with open('../Ancestors.fasta') as f:
+    #     counter = 0
+    #     for line in f:
+    #         name = line.rstrip()
+    #         seq = f.readline().rstrip()
+    #         name = name[1:]
+    #         for k in name.split(sep="+"):
+    #             nodedict[frozenset([k])] = seq
+    #             if frozenset([k]) in aliasdic.keys():
+    #                 nodedict[frozenset([aliasdic[k]])] = seq
+    # nodedictoclade = convert_data_dic_to_species_names(nodedict, mynodes, mytips)
+    # #print("altdic", altdict)
+    # alttop = {}
+    # with open('../alt_top.fasta') as f:
+    #     for line in f:
+    #         name = line.rstrip()
+    #         seq = f.readline().rstrip()
+    #         name = name[1:-7]
+    #         for k in name.split(sep="+"):
+    #             alttop[frozenset([k])] = seq
+    # alttopclade = convert_data_dic_to_species_names(alttop, mynodes, mytips)
+    #
+    # altpairs = {}
+    # with open('../Sequence_pairs_cleaned.txt') as f:
+    #     for line in f:
+    #         if 'altphy' in line:
+    #             xpair, ypair = line.rstrip().split(sep=',')
+    #             xpair = xpair[:-6]
+    #             ypair = ypair[:-6]
+    #             altpairs[frozenset([xpair, ypair])] = "A"
+    # alttoppairs = convert_data_dic_to_species_names(altpairs, mynodes, mytips)
+    #
+    #
+    # fig = plt.figure(figsize=(18, 18))
+    # ax = fig.add_subplot(111)
+    # draw_tree(mytree, mynodes, mytips, mycoors, ax, "gene")
+    # # for i in altdictoclade.keys():
+    # #     co = mycoors[list(i)[0]]
+    # #     ax.scatter(co[0], co[1] +.3, s = 20,color= 'red', zorder = 7, edgecolor="black")
+    # # for i in nodedictoclade.keys():
+    # #     co = mycoors[list(i)[0]]
+    # #     ax.scatter(co[0], co[1] - .3, s = 20,color= 'blue', zorder = 7, edgecolor="black")
+    # for i in alttopclade.keys():
+    #     co = mycoors[list(i)[0]]
+    #     ax.scatter(co[0], co[1]+.3, s = 35, color = 'gold', zorder = 7, edgecolors="black")
+    # for i in alttoppairs.keys():
+    #     if len(list(i)) > 1:
+    #         cox1, coy1 = mycoors[list(i)[0]]
+    #         cox2, coy2 = mycoors[list(i)[1]]
+    #         xarc, yarc = parabola([cox1, coy1], [cox2, coy2], .25)
+    #         ax.plot(xarc, yarc, color='teal', alpha=0.4, zorder=4)
+    #     else:
+    #         co = mycoors[list(i)[0]]
+    #         ax.scatter(co[0], co[1]-.3, s=35, color='teal', zorder=7, edgecolors="black")
+    # ax.plot([1.5, 2], [-160, -160], color = 'black')
+    # ax.set_axis_off()
+    # figure = plt.gcf()
+    # #plt.show()
+    # figure.savefig('../200303_alttoppology.pdf', figsize=(100, 30))
+    # plt.close()
+
+
+
+    #myduplication_nodes.reverse()
+    # for mycount, mydupnode in enumerate(myduplication_nodes):
+    #    mytrimmedscores = dupes_intscores(mydupnode, mytree, mynewdict)
+    #    filename = "../figures/200128_duplicationnode_trace" + clade_object_to_readable(mydupnode, mytree) + '.pdf'
+    #    all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, mytrimmedscores, filename, [], False)
+
+
+    #alldups, allscorestrim = specificity_after_duplication(mytree, mynewdict, myduplication_nodes)
+    #print(alldups)
+    #write_scores(myscores, "../200205_allparalogs.csv", mytree)
+
+    #myhomos = just_get_homos(mynewdict, mytree)
+    #all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, myhomos, '../200120_homodimers.pdf')
