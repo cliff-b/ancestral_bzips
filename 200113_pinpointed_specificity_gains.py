@@ -751,7 +751,7 @@ def pars_and_ancs(parscores, i, tree, data_dic):
     return parsandanc_onspec
 
 
-def write_scores(scores, filename, input_tree):
+def write_csv(scores, keylist, filename, input_tree):
     """writes scores and the proteins that caused them and their ancestor to a csv file
         Takes:
             scores: a dumb list of lists situation. [[frozenset([clade_object1, clade_object2]), ancestral_clade], interaction_score, distance]
@@ -760,18 +760,20 @@ def write_scores(scores, filename, input_tree):
         Returns:
             Nothing"""
     with open(filename, 'w') as f:
-        f.write("X_peptide,Y_peptide,ancestor,interaction,distance\n")
+        f.write('xpep,ypep,')
+        f.write(str(keylist))
+        f.write('\n')
         for i in scores:
-            if list(i[0][0])[0] not in input_tree.get_terminals():
-                xpep = Phylo.BaseTree.TreeMixin.get_nonterminals(input_tree).index(list(i[0][0])[0]) + 172
-            else:
-                xpep = str(list(i[0][0])[0]).lower()
-            if list(i[0][0])[1] not in input_tree.get_terminals():
-                ypep = Phylo.BaseTree.TreeMixin.get_nonterminals(input_tree).index(list(i[0][0])[1]) + 172
-            else:
-                ypep = str(list(i[0][0])[1]).lower()
-            ancestor = Phylo.BaseTree.TreeMixin.get_nonterminals(input_tree).index(i[0][1]) + 172
-            line = str(xpep) + ',' + str(ypep) + "," + str(ancestor) + "," + str(i[1]) + "," + str(i[2]) + '\n'
+            line = clade_object_to_readable(list(i)[0], input_tree) + ',' + clade_object_to_readable(list(i)[0], input_tree) +','
+            for key in keylist:
+                if type(scores[i][key]) is Phylo.Newick.Clade:
+                    line = line + clade_object_to_readable(scores[i][key], input_tree) + ','
+                elif type(scores[i][key]) is frozenset:
+                    for j in list(scores[i][key]):
+                        line = line + clade_object_to_readable(j, input_tree) + ','
+                else:
+                    line = line + str(scores[i][key]) +','
+            line  = line[:-1] + '\n'
             f.write(line)
     f.close()
     return
@@ -881,6 +883,29 @@ if __name__ == "__main__":
                parspecs[key] = specs[key]
        all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, parspecs, str('../figures/200506_spaghetti_paralogs' + clade_object_to_readable(list(score)[0], mytree)+ clade_object_to_readable(list(score)[1], mytree) + '.pdf'), [], [], False)
 
+    ############ compute number of paralogs for output
+    for key in mytrimmedscores.keys():
+        protein1, protein2 = list(key)
+        numpars = 0
+        pars = []
+        trace = Phylo.BaseTree.TreeMixin.trace(mytree, protein1, protein2)
+        trace.insert(0, protein1)
+        for pair in list(itertools.combinations(trace, 2)):
+            if frozenset({pair[0], pair[1]}) in mypars.keys():
+                try:
+                    interact = mynewdict[frozenset([pair[0], pair[1]])]
+                    numpars += 1
+                    pars.append((frozenset({pair}), interact))
+                    mytrimmedscores[key]['numpars'] = numpars
+                    mytrimmedscores[key]['parnames'] = pars
+                except KeyError:
+                    numpars += 1
+                    pars.append((frozenset({pair[0], pair[1]}), -1))
+                    mytrimmedscores[key]['numpars'] = numpars
+                    mytrimmedscores[key]['parnames'] = pars
+    write_csv(mytrimmedscores, ('ancestor','distance','numpars'), '../figures/200527_computation_for_R.csv', mytree)
+
+
     # plotscores = pars_and_ancs(mypars, mytrimmedscores, mytree, mynewdict)
     # allints = []
     # for i in mynewdict:
@@ -892,7 +917,7 @@ if __name__ == "__main__":
     #
     # write_scores(plotscores, "200220_anctoregains.csv", mytree)
 
-    #mytrimmedscores = dupes_intscores(myduplication_nodes, mytree, mynewdict)
+    #mytrimmedscores = dupes_intscores(myduplicfdation_nodes, mytree, mynewdict)
     #write_possible_paralogs(mytree, myduplication_nodes, mytrimmedscores, mymatched_dic)
     #write_odds_of_regain(mytree, mytrimmedscores, mymatched_dic, mynewdict)
     # altdict = {}

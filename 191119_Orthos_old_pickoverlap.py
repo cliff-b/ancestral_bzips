@@ -1147,12 +1147,12 @@ def circle(node, matched_dic, coor, size, ax, order_list, data_dic, treenodes):
                 else:
                     cols.append(cm.Greys(0.5))
         ax.scatter(xpoints, ypoints, color=cols, s=8, zorder=10, edgecolors='black')
-        for j in range(len(colnams)):
-            if str(colnams[j][0]).isdigit() and int(colnams[j][0]) > 170 and int(colnams[j][0]) < 177:
-                ax.text(colnams[j][1]+0.2, colnams[j][2] -0.33, s = colnams[j][0], fontsize=10, color = "red")
-            else:
-                #print("text being printed ", colnams[j], " num cols = ", len(colnams))
-                ax.text(colnams[j][1]+0.2, colnams[j][2] -0.33, s = colnams[j][0], fontsize=5)
+        # for j in range(len(colnams)):
+        #     if str(colnams[j][0]).isdigit() and int(colnams[j][0]) > 170 and int(colnams[j][0]) < 177:
+        #         ax.text(colnams[j][1]+0.2, colnams[j][2] -0.33, s = colnams[j][0], fontsize=10, color = "red")
+        #     else:
+        #         #print("text being printed ", colnams[j], " num cols = ", len(colnams))
+        #         ax.text(colnams[j][1]+0.2, colnams[j][2] -0.33, s = colnams[j][0], fontsize=5)
         # Draw lines between the nodes all the nodes colored by whether there is an interaction or not
         for c, d in itertools.combinations(range(len(order_list)), 2):
             co_x = [xs[order_list[c][1]] + (xs[order_list[c][1]] - x) * order_list[c][2], xs[order_list[d][1]] + (xs[order_list[d][1]] - x) * order_list[d][2]]
@@ -1301,7 +1301,7 @@ def draw_species_tree(input_tree, nodes, tips, coordinates, duplication_nodes, s
                 subfig.text(coordinate2[0] + 1.5, coordinate2[1] - 0.33, genus + ". " + species, fontsize=5)
             else:
                 coordinate2 = coordinates[str(j)]
-                subfig.text(coordinate2[0] + .25, coordinate2[1], str(j), fontsize=5)
+                #subfig.text(coordinate2[0] + .25, coordinate2[1], str(j), fontsize=5)
             if frozenset([frozenset(coordinate1), frozenset(coordinate2)]) not in exclude:
                 subfig.plot([coordinate1[0], coordinate1[0]], [coordinate1[1], coordinate2[1]], color=col, zorder=1)
                 subfig.plot([coordinate1[0], coordinate2[0]], [coordinate2[1], coordinate2[1]], color=col, zorder=1)
@@ -1352,7 +1352,7 @@ if __name__ == "__main__":
     # print(tips)
     # print(nodes)
     # someday we'll get there
-    mydata_dic = load_experiment('../190919_medianEA66k-1.csv')
+    mydata_dic = load_experiment('../200120_most_aliases.csv')
     myduplication_nodes = find_duplication_nodes(mytree, '../Gene_duplications.txt')
     print("dupe nodes", myduplication_nodes)
     species = get_species(mytips)
@@ -1382,7 +1382,7 @@ if __name__ == "__main__":
 
 
     figure = plt.gcf()
-    figure.savefig('../200107_full_paralogs.pdf', figsize = (100, 30))
+    figure.savefig('../200121_full_paralogsclean.pdf', figsize = (20, 50))
     plt.show()
     # for myi in range(10):
     #     print("Here's some data", list(mydata_dic)[myi], " = ", mydata_dic[list(mydata_dic)[myi]])
