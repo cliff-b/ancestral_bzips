@@ -488,7 +488,7 @@ def plot_specificity(intscores, tree, coors, ax, descendscores, data_dic):
                 xarc, yarc = parabola([cox1, coy1], [cox2, coy2], .25)
                 ax.plot(xarc, yarc, color=arccol[intscores[i]['int_score']], alpha=0.4, zorder=4)
             except:
-                print("couldn't find", i[0][0], "in coordic")
+                print("couldn't find", list(i)[0], "in coordic")
         else:
             try:
                 cox, coy = coors[list(i)[0]]
@@ -764,7 +764,7 @@ def write_csv(scores, keylist, filename, input_tree):
         f.write(str(keylist))
         f.write('\n')
         for i in scores:
-            line = clade_object_to_readable(list(i)[0], input_tree) + ',' + clade_object_to_readable(list(i)[0], input_tree) +','
+            line = clade_object_to_readable(list(i)[0], input_tree) + ',' + clade_object_to_readable(list(i)[1], input_tree) +','
             for key in keylist:
                 if type(scores[i][key]) is Phylo.Newick.Clade:
                     line = line + clade_object_to_readable(scores[i][key], input_tree) + ','
@@ -853,6 +853,9 @@ def trace_specificity_gain(intscore, tree, nodes, tips, coors, data_dic, count, 
 
 
 if __name__ == "__main__":
+    #
+    # Processing of data into usable paralogs and trees
+    #
     mydata_dic = load_experiment('../200120_most_aliases.csv')
     mytree, mytips, mynodes = read_tree('../190918_EA_tree1only.txt')
     myduplication_nodes = find_duplication_nodes(mytree, '../Gene_duplications.txt')
@@ -863,18 +866,30 @@ if __name__ == "__main__":
     mynewdict = convert_data_dic_to_species_names(mydata_dic, mynodes, mytips)
     myscores = paralog_timing(mypars, mynewdict, mytree)
     mycoors = get_tree_coordinates(mytree, mynodes, mytips)
+    #
+    # Figure 2A ....... currently
+    # All paralogs plotted in spagettigram fashion
+    #
+    all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, myscores, '../figures/200827_all_paralogs_spaghetti.pdf', [], [], False)
 
-    #info_on_specificity_gains(myscores)
+    #
+    # Figure 2B ...... currently
+    # rectangle paths showing the 8 traces that specificity evolved over between paralogs
+    #
+
     mytrimmedscores = basal_paralog_int_loss(myscores, mytree)
-
-    print("pauser")
-    #rectangle paths showing where specificity occurred
     all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, mytrimmedscores, '../figures/200505_traced_specificity_gains.pdf')
-    #spaghettigrams for each path
+    #
+    # Figure S1 A-H ....... currently
+    # spaghettigrams for each path that specificity was gained over for paralogs with all interactions on that path
+    #
     for mycount, score in enumerate(mytrimmedscores):
        specs = trace_specificity_gain(score, mytree, mynodes, mytips, mycoors, mynewdict, mycount, descendants=False)
        all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, specs, str('../figures/200506_traced_specgain' + clade_object_to_readable(list(score)[0], mytree)+ clade_object_to_readable(list(score)[1], mytree) + '.pdf'), [], [], False)
-
+    #
+    # Figure S2 A-H ........ currently
+    # spagettigrams for each path specificty was gained over for paralogs with only paralogous interactions
+    #
     for mycount, score in enumerate(mytrimmedscores):
        specs = trace_specificity_gain(score, mytree, mynodes, mytips, mycoors, mynewdict, mycount, descendants=False)
        parspecs = {}
@@ -882,10 +897,15 @@ if __name__ == "__main__":
            if len(key) == 1 or key in mypars:
                parspecs[key] = specs[key]
        all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, parspecs, str('../figures/200506_spaghetti_paralogs' + clade_object_to_readable(list(score)[0], mytree)+ clade_object_to_readable(list(score)[1], mytree) + '.pdf'), [], [], False)
+    #
+    # Figure 2C distance from root that specificity occurred compared to distance from 
+    #
+    #
 
-    ############ compute number of paralogs for output
+    ############ compute number of paralogs that occurred before specificity was gained
     for key in mytrimmedscores.keys():
         protein1, protein2 = list(key)
+        mytrimmedscores[key]['proteinpair'] = (protein1, protein2)
         numpars = 0
         pars = []
         trace = Phylo.BaseTree.TreeMixin.trace(mytree, protein1, protein2)
@@ -903,8 +923,38 @@ if __name__ == "__main__":
                     pars.append((frozenset({pair[0], pair[1]}), -1))
                     mytrimmedscores[key]['numpars'] = numpars
                     mytrimmedscores[key]['parnames'] = pars
+        #add computation to figure out which side changes occured on
+        interact1, interact2 = -1, -1
+        try:
+            interact1 = mynewdict[mytrimmedscores[key]['ancestor'].union(frozenset({protein1}))] #it's dumb but the ancestor is already a frozenset
+        except KeyError:
+            pass
+        try:
+            interact2 = mynewdict[mytrimmedscores[key]['ancestor'].union(frozenset({protein2}))]
+        except KeyError:
+            pass
+        mytrimmedscores[key]['anc_to_diverge'] = (interact1, interact2)
+    #
+    #   Figure 2E
+    #
     write_csv(mytrimmedscores, ('ancestor','distance','numpars'), '../figures/200527_computation_for_R.csv', mytree)
+    write_csv(mytrimmedscores, ('anc_to_diverge',), '../figures/200722_anc_to_diverge_ints.csv', mytree)
+    for key in myscores.keys():
+        protein1, protein2 = list(key)
+        myscores[key]['proteinpair'] = (protein1, protein2)
+        try:
+            myscores[key]['int_score']
+        except KeyError:
+            myscores[key]['int_score'] = -2
+        try:
+            myscores[key]['distance']
+        except KeyError:
+            myscores[key]['distance'] = -1
+    write_csv(myscores, ('int_score','distance'), '../figures/200722_allpar_score_and_dist.csv', mytree)
 
+    #for paralog in myscores.keys():
+
+    #for key in mytrimmedscores.keys()
 
     # plotscores = pars_and_ancs(mypars, mytrimmedscores, mytree, mynewdict)
     # allints = []
