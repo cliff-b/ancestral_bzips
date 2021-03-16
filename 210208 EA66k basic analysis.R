@@ -121,7 +121,7 @@ anctodiv <- data.frame(anctodiv, "ancints" = as.character(c("")))
 anctodiv$ancints <- as.character(anctodiv$ancints)
 anctodiv$xpep_anc_int <- as.numeric(anctodiv$xpep_anc_int)
 anctodiv$ypep_anc_int <- as.numeric(anctodiv$ypep_anc_int)
-anctodiv$ancints[anctodiv$xpep_anc_int == 1.0 & anctodiv$ypep_anc_int == 1.0] <- "Both"
+anctodiv$ancints[anctodiv$xpep_anc_int == 1.0 & anvb ctodiv$ypep_anc_int == 1.0] <- "Both"
 anctodiv$ancints[anctodiv$xpep_anc_int == 1.0 & anctodiv$ypep_anc_int == 0.5] <- "Both"
 anctodiv$ancints[anctodiv$xpep_anc_int == 0.5 & anctodiv$ypep_anc_int == 1.0] <- "Both"
 anctodiv$ancints[anctodiv$xpep_anc_int == 1.0 & anctodiv$ypep_anc_int == 0.0] <- "one"
