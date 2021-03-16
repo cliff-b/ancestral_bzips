@@ -4,12 +4,22 @@ import numpy as np
 from scipy import stats
 import itertools
 import matplotlib.pyplot as plt
+import networkx as nx
 from matplotlib.patches import Wedge
 import math
 from scipy.interpolate import CubicSpline
+from scipy.stats import beta
+from scipy.optimize import leastsq
 from matplotlib import cm
+from matplotlib.collections import PatchCollection
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 import random
 
+
+class Clade():
+    def __lt__(self, other):
+        return id(self) < id(other)
 
 def read_tree(treefile, lower=True, silent=True):
     """Takes a phylogenetic tree file
@@ -448,6 +458,23 @@ def plot_specificity(intscores, coors, ax):
     return
 
 
+def plot_specificity_scatters(coors, ax, intscores):
+    if all([intscores[i]['int_score'] in (1.0, 0.5, 0.0, -1.0) for i in intscores if 'int_score' in intscores[i]]):
+        arccol = {1.0: (255 / 256, 49 / 256, 49 / 256, 1), 0.5: (196 / 256, 0, 237 / 256, 1), 0.0: (0, 145 / 256, 244 / 256, 1), -1.0: (0.5, 0.5, 0.5, 1)}
+    else:
+        arccol = [cm.tab20(x / (len(set(intscores[i]['int_score'] for i in intscores)) + 1)) for x in range(len(set(intscores[i]['int_score'] for i in intscores)) + 1)]
+        for cnt, col in enumerate(arccol):
+            ax.scatter(2.5, -cnt * 2, color=col, s=25, zorder=5, edgecolor='black')
+            ax.text(2.8, -cnt * 2, cnt)
+    for i in intscores:
+        try:
+            cox, coy = coors[list(i)[0]]
+            ax.scatter(cox, coy, color=arccol[intscores[i]['int_score']], s=25, zorder=5, edgecolor='black')
+        except KeyError:
+            pass
+    return
+
+
 def plot_specificity_rects(tree, coors, ax, intscores):
     """
     A function to draw rectangles across a tree between two nodes that gain specificity on a tree
@@ -502,12 +529,16 @@ def all_paralog_plot_wrapper(tree, nodes, tips, coors, intscores, filename, desc
         plot_specificity_rects(tree, coors, ax, intscores)
     elif graphtype == 'circles':
         plot_species_circles(coors, intscores, ax, tree, descendscores, data_dic)  # this is a bad hack, descendscores is actually the tips
+    elif graphtype == 'scatter':
+        plot_specificity_scatters(coors, ax, intscores)
+    elif graphtype == 'piechart':
+        plot_wedges(coors, ax, intscores, fig)
     else:
         plot_specificity(intscores, coors, ax)
     xleft, xright = ax.get_xlim()
     ybottom, ytop = ax.get_ylim()
     ratio = 2.5
-    ax.set_aspect(abs((xright - xleft) / (ybottom - ytop)) * ratio)
+    #ax.set_aspect(abs((xright - xleft) / (ybottom - ytop)) * ratio)
     ax.set_axis_off()
     figure = plt.gcf()
     figure.savefig(filename, figsize=(100, 30))
@@ -516,7 +547,7 @@ def all_paralog_plot_wrapper(tree, nodes, tips, coors, intscores, filename, desc
     return
 
 
-def basal_paralog_int_loss(intscores, tree, score_for_loss=0):
+def basal_paralog_int_loss(intscores, tree, score_for_loss=(0,0.5)):
     """Takes the intscores list and finds the two paralogs that are most closely related to the ancestor node for each ancestral node and trims the intscores list to just those
     Takes:
         intscores: a dumb list of lists situation. [[frozenset([clade_object1, clade_object2]), ancestral_clade], interaction_score, distance]
@@ -528,7 +559,7 @@ def basal_paralog_int_loss(intscores, tree, score_for_loss=0):
     ancestor_dic = {}
     for i in intscores:
         if 'int_score' in intscores[i]:
-            if intscores[i]['int_score'] == score_for_loss:
+            if intscores[i]['int_score'] in score_for_loss:
                 if intscores[i]['ancestor'] not in ancestor_dic:
                     ancestor_dic[intscores[i]['ancestor']] = [i]
                 else:
@@ -551,8 +582,8 @@ def write_odds_of_regain(tree, trim_score, matched_dic, data_dict):
     alls = []
     matchedvals = [item for sublist in list(matched_dic.values()) for item in sublist]
     for i in trim_score:
-        n1 = list(i[0][0])[0]
-        n2 = list(i[0][0])[1]
+        n1 = list(i)[0]
+        n2 = list(i)[1]
         n1desc = get_descendants(tree, n1)
         n2desc = get_descendants(tree, n2)
         perms = [frozenset([x, y]) for x in n1desc for y in n2desc]
@@ -560,9 +591,9 @@ def write_odds_of_regain(tree, trim_score, matched_dic, data_dict):
             try:
                 score = data_dict[j]
                 all_dist = Phylo.BaseTree.TreeMixin.distance(tree, list(j)[0], list(j)[1])
-                alls.append([clade_object_to_readable(i[0][1], tree), clade_object_to_readable(list(j)[0], tree), clade_object_to_readable(list(j)[1], tree), score, score_dic[score], all_dist, "all_desc"])
+                alls.append([clade_object_to_readable(list(trim_score[i]['ancestor'])[0], tree), clade_object_to_readable(list(j)[0], tree), clade_object_to_readable(list(j)[1], tree), score, score_dic[score], all_dist, "all_desc"])
                 if j in matchedvals:
-                    alls.append([clade_object_to_readable(i[0][1], tree), clade_object_to_readable(list(j)[0], tree), clade_object_to_readable(list(j)[1], tree), score, score_dic[score], all_dist, "match_desc"])
+                    alls.append([clade_object_to_readable(list(trim_score[i]['ancestor'])[0], tree), clade_object_to_readable(list(j)[0], tree), clade_object_to_readable(list(j)[1], tree), score, score_dic[score], all_dist, "match_desc"])
             except KeyError:
                 pass
         trace = Phylo.BaseTree.TreeMixin.trace(tree, n1, n2)
@@ -572,7 +603,7 @@ def write_odds_of_regain(tree, trim_score, matched_dic, data_dict):
             try:
                 score = data_dict[j]
                 all_dist = Phylo.BaseTree.TreeMixin.distance(tree, list(j)[0], list(j)[1])
-                alls.append([clade_object_to_readable(i[0][1], tree), clade_object_to_readable(list(j)[0], tree), clade_object_to_readable(list(j)[1], tree), score, score_dic[score], all_dist, "trace_w_n1desc"])
+                alls.append([clade_object_to_readable(list(trim_score[i]['ancestor'])[0], tree), clade_object_to_readable(list(j)[0], tree), clade_object_to_readable(list(j)[1], tree), score, score_dic[score], all_dist, "trace_w_n1desc"])
             except KeyError:
                 pass
         tracecombsn2 = [frozenset([x, y]) for x in trace for y in n2desc]
@@ -580,10 +611,10 @@ def write_odds_of_regain(tree, trim_score, matched_dic, data_dict):
             try:
                 score = data_dict[j]
                 all_dist = Phylo.BaseTree.TreeMixin.distance(tree, list(j)[0], list(j)[1])
-                alls.append([clade_object_to_readable(i[0][1], tree), clade_object_to_readable(list(j)[0], tree), clade_object_to_readable(list(j)[1], tree), score, score_dic[score], all_dist, "trace_w_n2desc"])
+                alls.append([clade_object_to_readable(list(trim_score[i]['ancestor'])[0], tree), clade_object_to_readable(list(j)[0], tree), clade_object_to_readable(list(j)[1], tree), score, score_dic[score], all_dist, "trace_w_n2desc"])
             except KeyError:
                 pass
-    with open('../200129_Regains.csv', 'w') as f:
+    with open('../data_for_R2/210205_Regainswithweakloss.csv', 'w') as f:
         f.write("Dupe_node,X_peptide,Y_peptide,intscore,interaction,distance,int_subdivision\n")
         for line in alls:
             f.write(str(line).replace("'", "")[1:-1] + '\n')
@@ -652,6 +683,40 @@ def trace_specificity_gain(intscore, tree, data_dic):
     return spectrace
 
 
+def plot_wedges(coors, ax, intscores, fig):
+    arccol = {1.0: (255 / 256, 49 / 256, 49 / 256, 1), 0.5: (196 / 256, 0, 237 / 256, 1), 0.0: (0, 145 / 256, 244 / 256, 1), -1.0: (0.5, 0.5, 0.5, 1)}
+    scale, stretch = 0.022, 8
+    ext_x, ext_y = [max(list(coors.values())[0]) + 1, abs(min(list(coors.values())[1])) + 1]
+    #ax.set_aspect(0.030)
+    #proteins = intscores.keys()
+    #round(max(i[0] for i in list(coors.values()))) , abs(min(list(coors.values()), key =lambda x: x[1])[1])
+    #fig, axs = plt.subplots(2, 5)
+    for prot in intscores:
+        intscores[prot]['int_score'].sort()
+        x, y = coors[list(prot)[0]]
+        numspecs = len(intscores[prot]['int_score'])
+        angle = 360.0 / numspecs
+        xs = [np.cos(math.radians(i * angle)) * scale * ext_x + x for i in range(numspecs)]
+        ys = [np.sin(math.radians(i * angle)) * scale * ext_y * stretch + y for i in range(numspecs)]
+        patches =[]
+        colors = [ (0.5, 0.5, 0.5, 1), (0, 145 / 256, 244 / 256, 1),(196 / 256, 0, 237 / 256, 1),(255 / 256, 49 / 256, 49 / 256, 1) ]
+        sizes = [intscores[prot]['int_score'].count(score) for score in sorted(arccol.keys())]
+        #for cnt, paralog in enumerate(intscores[prot]['int_score']):
+        #    wed = Wedge((x, y), .3, (cnt * angle ), ((cnt + 1) * angle ), color=arccol[paralog])
+        #    patches.append(wed)
+         #   colors.append(arccol[paralog])
+       # colors = np.array(colors)
+        #p = PatchCollection(patches)
+        #p.set_array(colors)
+        #ax.add_collection(p)
+        #edges seem to be 0.08 and .83 or so with bottom left = 0.0
+        axs = fig.add_axes([((x*.76)/4.5) +0.12, ((y + 170)*.64)/170+.15, .03, .03])
+        axs.pie(sizes, colors=colors)
+        #ax.autoscale_view(scalex=False)
+        ax.text(x-.1, y-1.5, 'n=' + str(numspecs))
+
+
+    return
 def plot_species_circles(species_coordinates, matched_dic, ax, species_tree,  tips, data_dic):
     """produces a species tree with proteins cluster around the tips, with heterodimers as lines between homodimeric points
     includes an ordering so that the prefixes that appear in the clades function are the order around the circle that
@@ -705,6 +770,337 @@ def plot_species_circles(species_coordinates, matched_dic, ax, species_tree,  ti
     ax.set_aspect(abs((xright - xleft) / (ybottom - ytop)) * ratio)
     return
 
+def calculate_num_ints_switched(intscores, tree, nodes, tips, nonints='expand'):
+    stepscores = {}
+    alltree = nodes + tips
+    for clade in alltree:
+        if clade_object_to_readable(clade, tree) == '173':
+            clade173 = clade
+            break
+    for clade in tips:
+        trace = Phylo.BaseTree.TreeMixin.trace(mytree, clade173, clade)
+        tracescores = [(c, intscores[frozenset([c, clade173])]['int_score'], 1) for c in trace]
+        tracescorescopy = tracescores[:]
+        steps, cnt = 1, 0
+        curparent = clade173
+        while cnt < len(tracescores):
+
+            t = tracescorescopy[cnt]
+            stepscores[frozenset([t[0]])] = {}
+            if t[1] in (0, 0.5):
+                if nonints == 'expand':
+                    curparent = t[0]
+                    steps += 1
+                    tracescorescopy = tracescorescopy[:cnt] + [(c, intscores[frozenset([c, curparent])]['int_score'], steps) for c in trace[cnt:]]  # Yes I know this is unforgiveable.
+                elif nonints == 'onlyhomos':
+                    if intscores[frozenset([t[0]])]['int_score'] == 1:
+                        curparent = t[0]
+                        steps += 1
+                        tracescorescopy = tracescorescopy[:cnt] + [(c, intscores[frozenset([c, curparent])]['int_score'], steps) for c in trace[cnt:]]  # Yes I know this is unforgiveable.
+
+            elif t[1] == -1:
+                tracescorescopy[cnt] = (t[0], intscores[frozenset([t[0], curparent])]['int_score'], 0)
+            cnt += 1
+            stepscores[frozenset([t[0]])]['curparent'] = curparent
+        for t in tracescorescopy:
+            stepscores[frozenset([t[0]])]['int_score'] = t[2]
+
+    return stepscores
+
+
+def pick_nonoverlap(data_dic):
+    """finds a set of proteins from the same tree that do not share any branches on the tree and records their
+    interaction scores and branch length the algorithm takes a random pair, records values, and removes those that
+     overlap with it, then takes a new pair
+    Takes:
+        data_dic: a dictionary of frozensets of protein pairs on the tree to lists of two numerics and a nested list of
+        numerics, in the form of key = frozenset({'173', '174'}), values = [total distance between the two proteins in
+        the key,  whether they interact, [trace of clade objects between the two proteins on a tree]]
+        ie = sample[
+    Returns:
+        values:
+            a list of numerics of whether the proteins interacted or not
+        distances:
+            a list of numerics of how far apart the proteins were
+    """
+    values, distances = [], []
+    keys = list(data_dic.keys())
+
+    while len(keys) > 0:
+        key = np.random.choice(keys)
+        values.append(data_dic[key]['int_score'])
+        distances.append(data_dic[key]['distance'])
+        # Here we test for overlap in path. if i has any shared nodes with key then we delete it from the dictionary
+        for i in keys:
+            try:
+                if len(set(data_dic[i]['trace']).intersection(data_dic[key]['trace'])) > 0 and i != key:
+                    del data_dic[i]
+            except KeyError:
+                pass
+        del data_dic[key]
+        keys = list(data_dic.keys())
+    return values, distances
+
+def neutral_evo(tree, data_dic, tip_dic, duplication_nodes, paralogs, samples=20):
+    """Major function that creates three plots for how orthologs continue interacting
+    over time. Takes a tree and finds the orthologs that homodimerize, divides them into
+    different bins based on their cumulative branch length and then measures the average of each bin
+    Then uses a sampling technique to get error-bars on these averages, by sampling orthologs with non-overlapping
+    paths. Takes the odds of interacting from each of these 20 times and then averages them. It then produces a
+    single term exponential model fit with least squares to the averages.
+    Takes:
+        tree: a tree object
+        data_dic:a dictionary frozensets to floats of interaction data in the form key = frozenset({'173', '174'}),
+                    value = 1.0
+        tip_dic: dictionary of strings to strings to convert names from lowercase in the data_dic to
+                mixedcase in the tree
+        duplication_nodes: a list of clade objects that were points of gene duplication
+        samples: Number of times to run the sampling. 20 seems to be fairly constant
+    Returns:
+        Nothing. It does make three graphs however
+        Graph 1: Average percent of orthologs still interacting
+        Graph 2: Average percent of interactions lost, with clopper pearson errorbars and fit with a simple exp model
+        Graph 3: Number of orthologs per bin per sample
+    """
+    bins = [0, 0.2, 0.4, 0.6, 0.8, 1.1, 1.5, 2, 2.5]
+
+    bin_contents, bin_values = [], []
+    average_val, average_dist, average_no = [], [], []
+    average_valp, average_distp, average_nop = [], [], []
+    tot_yerr_pos, tot_yerr_neg = [], []
+
+    filtered_orthologs = find_orthologs(tree, data_dic, tip_dic, duplication_nodes)
+    distances_tot = [filtered_orthologs[i]['distance'] for i in filtered_orthologs]
+    values_tot = [filtered_orthologs[i]['int_score'] for i in filtered_orthologs]
+    pairs = list(filtered_orthologs.keys())
+
+
+    for i in range(len(bins)):
+        bin_contents.append([])
+        bin_values.append([])
+    indices = np.digitize(distances_tot, bins) - 1
+    for c, i in enumerate(indices):
+        bin_contents[i].append(pairs[c])
+        bin_values[i].append(values_tot[c])
+
+    bin_average = [np.mean(i) for i in bin_values]
+    print("the bin average was: ", bin_average)
+    plt.plot(bins, bin_average, 'o', color='grey')
+
+    for s in range(samples):
+        random_val, random_dist, random_no = [], [], []
+        yerr_pos, yerr_neg = [], []
+        for i in bin_contents:
+            new_dic = {}
+            for j in i:
+                new_dic[j] = filtered_orthologs[j]
+            values, distances = pick_nonoverlap(new_dic)
+            values = [math.floor(v) for v in values]
+            random_val.append(np.mean(values))
+            random_dist.append(np.mean(distances))
+            random_no.append(len(values))
+            errors = clopper_pearson(np.sum(values), random_no[-1], alpha=0.55)
+            yerr_pos.append(errors[1])
+            yerr_neg.append(errors[0])
+        tot_yerr_pos.append(yerr_pos)
+        tot_yerr_neg.append(yerr_neg)
+        average_val.append(random_val)
+        average_dist.append(random_dist)
+        average_no.append(random_no)
+
+
+    for i in paralogs:
+        if 'distance' not in paralogs[i]:
+            paralogs[i]['distance'] = Phylo.BaseTree.TreeMixin.distance(tree, list(i)[0], list(i)[1])
+        if 'int_score' not in paralogs[i]:
+            try:
+                paralogs[i]['int_score'] = data_dic[i]
+            except KeyError:
+                paralogs[i]['int_score'] = -1
+        paralogs[i]['trace'] = Phylo.BaseTree.TreeMixin.trace(tree, list(i)[0], list(i)[1]) + [list(i)[0]]
+
+    paralogs = {p:paralogs[p] for p in paralogs if paralogs[p]['int_score'] != -1 and paralogs[p]['distance'] < 2.5}
+
+    distances_totp = [paralogs[i]['distance'] for i in paralogs ]
+    values_totp = [paralogs[i]['int_score'] for i in paralogs]
+    pairsp = list(paralogs.keys())
+
+    def partition(lst, n):
+        division = len(lst) / float(n)
+        return [lst[int(round(division * i)): int(round(division * (i + 1)))] for i in xrange(n)]
+
+    binsp = partition(distances_totp, 8)
+    bin_contentsp = [[] for i in range(len(binsp))]
+    bin_valuesp = [[] for i in range(len(binsp))]
+    indices = np.digitize(distances_totp, binsp) - 1
+    for c, i in enumerate(indices):
+        bin_contentsp[i].append(pairsp[c])
+        bin_valuesp[i].append(values_totp[c])
+
+    for s in range(samples):
+        random_val, random_dist, random_no = [], [], []
+        for i in bin_contentsp:
+            new_dic = {}
+            for j in i:
+                new_dic[j] = paralogs[j]
+            values, distances = pick_nonoverlap(new_dic)
+            values = [math.floor(v) for v in values]
+            random_val.append(np.mean(values))
+            random_dist.append(np.mean(distances))
+            random_no.append(len(values))
+        average_valp.append(random_val)
+        average_distp.append(random_dist)
+        average_nop.append(random_no)
+
+    xs = []
+    for i in range(len(bins[:-1])):
+        xs.append((bins[i] + bins[i + 1]) / 2.0)
+    dicttor = {}
+    for cnt, i in enumerate(xs):
+        dicttor[str(i)] = {}
+        dicttor[str(i)]['val'] = []
+        dicttor[str(i)]['no'] = []
+        for val in average_val:
+            dicttor[str(i)]['val'].append(val[cnt])
+        for no in average_no:
+            dicttor[str(i)]['no'].append(no[cnt])
+
+    dicttorpara = {}
+    for cnt, i in enumerate(xs):
+        dicttorpara[str(i)] = {}
+        dicttorpara[str(i)]['val'] = []
+        dicttorpara[str(i)]['no'] = []
+        for val in average_valp:
+            dicttorpara[str(i)]['val'].append(val[cnt])
+        for no in average_nop:
+            dicttorpara[str(i)]['no'].append(no[cnt])
+
+    with open('../data_for_R/201208_orthosandparasweakintsasloss.csv','w') as f:
+        f.write('bin_avg,avg_score,count,logtype\n')
+        for i in dicttor:
+            for cnt, score in enumerate(dicttor[i]['val']):
+                line = str(i) + ',' + str(score) + ',' + str(dicttor[i]['no'][cnt]) + ',' + 'ortholog' + '\n'
+                f.write(line)
+        for i in dicttorpara:
+            for cnt, score in enumerate(dicttorpara[i]['val']):
+                line = str(i) + ',' + str(score) + ',' + str(dicttorpara[i]['no'][cnt]) + ',' + 'paralog' + '\n'
+                f.write(line)
+    f.close()
+
+    write_csv(filtered_orthologs, ('int_score',), '../data_for_R/201123_filtered_orthosonly.csv', tree)
+
+
+    result = leastsq(rev_first_order_error, np.array([0.2]), args=(xs[:8], np.mean(average_val, axis=0)[:8]))
+    print("the result was: ", result)
+    print("the sum was: ", sum(rev_first_order_error(result[0], xs[:8], np.mean(average_val, axis=0)[:8])))
+    plt.figure()
+    plt.plot(xs, rev_first_order(np.array(xs), result[0][0]))
+    plt.errorbar(bins, np.mean(average_val, axis=0), yerr=[np.mean(average_val, axis=0) - np.nanmean(tot_yerr_neg, axis=0), np.nanmean(tot_yerr_pos, axis=0) - np.mean(average_val, axis=0)], marker='o', linestyle='None')
+    plt.xlabel('Branch length')
+    plt.ylabel("Percent of interactions lost")
+    plt.figure()
+    plt.errorbar(np.mean(average_dist, axis=0), np.mean(average_no, axis=0), yerr=np.std(average_val, axis=0))
+
+    plt.show()
+
+
+def find_orthologs(tree, data_dic, tip_dic, duplication_list):
+    """Takes a tree and interaction data and gives back a list of orthologs
+        importantly these orthologs are only ones where the homodimers of the two
+        interact and the ancestral proteins homodimers interact
+    Takes:
+        data_dic: a dictionary frozensets to floats of interaction data in the form key = frozenset({'173', '174'}),
+                    value = 1.0
+        tip_dic: dictionary of strings to strings to convert names from lowercase in the data_dic to
+                    mixedcase in the tree
+        duplication_list: a list of clade objects that were points of gene duplication
+    Returns:
+        ortho_dic: a dictionary of key = frozenset and value = list of two numbers, distance between
+                    orthologs and whether they interact or not """
+    print('Finding orthologs')
+    ortho_dic = {}
+    orthocount, no, missingpoints, dupancs, nonhomos = 0, 0, 0, 0, 0
+    for i in data_dic:
+        if len(list(i)) > 1:
+            protein1, protein2 = list(i)
+            ancestor = Phylo.BaseTree.TreeMixin.common_ancestor(tree, protein1, protein2)
+            # This is a gross way to get from tree to tip_dic name
+            try:
+                # check that the homodimers for protein1, protein2 and ancestor all homodimerize
+                if ancestor not in duplication_list and data_dic[frozenset([ancestor])] == 1: #and data_dic[frozenset([protein1])] == 1 and data_dic[frozenset([protein2])] == 1:
+                    ortho_dic[i] = {'distance':Phylo.BaseTree.TreeMixin.distance(tree, protein1, protein2), 'int_score':data_dic[i], 'trace': Phylo.BaseTree.TreeMixin.trace(tree, protein1, protein2) + [protein1]}
+                    orthocount += 1
+                elif ancestor in duplication_list:
+                    dupancs += 1
+            except KeyError:
+                missingpoints += 1
+    print('Done finding orthologs', '\nNumber of orthologs: ', orthocount)
+    print("Missing points: ", missingpoints)
+    print('ancestors that are duplication nodes', dupancs)
+    return ortho_dic
+
+
+def clopper_pearson(k, n, alpha=0.32):
+    """
+    http://en.wikipedia.org/wiki/Binomial_proportion_confidence_interval
+    alpha confidence intervals for a binomial distribution of k expected successes on n trials
+    Clopper Pearson intervals are a conservative estimate.
+    Takes:
+        k = integer, number of k successes
+        n = integer, number of n trials
+        alpha = two sided confidence
+    Returns:
+        a two element list with the form [lower estimate, higher estimate]
+    """
+    lo = beta.ppf(alpha / 2, k, n - k + 1)
+    hi = beta.ppf(1 - alpha / 2, k + 1, n - k)
+    return [lo, hi]
+
+def rev_first_order(t, kf):
+    """Simple function takes time t and exponent kf and plugs them into
+     a function that is a reversible first order model
+     Takes:
+        t: a time or general x-axis point
+        kf: the exponential term
+    Returns:
+        a: the value of y in the function"""
+    a = 1 - np.exp(-1 * (kf * t))
+    return a
+
+def rev_first_order_error(kf, t, values):
+    """Computes the least squared error of an array of values which
+    it fits to a first order model
+    Takes:
+        kf: a numeric for the exponential term of the model
+        t: an array of n time points for the model's x-axis
+        values: true values for the y axis
+    Returns:
+        error: an 1d array of n values of the least squared error between the model and the data
+    """
+
+    model = np.array([rev_first_order(i, kf) for i in t])
+    error = []
+    for c in range(len(values)):
+        error.append((values[c] - model[c]) ** 2)
+    error = np.ravel(error)
+    return error
+
+def cladesbetweentrees(tree, oldtree):
+    cladeconversiondict = {}
+    def flatten(l):
+        if type(l) == list:
+            return [str(a) for i in x for a in flatten(i)]
+        else:
+            return [str(x)]
+    for clade in oldtree:
+        cladelist = flatten(clade)
+        for newclade in tree:
+            newcladelist = flatten(newclade)
+            if cladelist == newcladelist:
+                cladeconversiondict[clade] = newclade
+    return cladeconversiondict
+
+
 
 if __name__ == "__main__":
     #
@@ -712,6 +1108,7 @@ if __name__ == "__main__":
     #
     mydata_dic, myraws = load_experiment('../200120_most_aliases.csv')
     mytree, mytips, mynodes = read_tree('../190918_EA_tree1only.txt')
+    #mytree, mytips, mynodes = read_tree('../201209_EA_tree1only.nwk')
     myduplication_nodes = find_duplication_nodes(mytree, '../Gene_duplications.txt')
     myspecies = get_species(mytips)
     myspecies_tree, species_tips, species_nodes = read_tree('../speciestree_node_names.newick.nwk')
@@ -724,17 +1121,205 @@ if __name__ == "__main__":
     myspeccoors = get_tree_coordinates(myspecies_tree, species_nodes, species_tips)
     mytrimmedscores = basal_paralog_int_loss(myscores, mytree)
 
-    figstomake = ['0A']
+    #neutral_evo(mytree, mynewdict, mytips, myduplication_nodes, mypars, 20)
+    figstomake = ['6A']
 
-    if '0A' in figstomake:
-        all_paralog_plot_wrapper(myspecies_tree, species_nodes, species_tips, myspeccoors, mymatched_dic, '../figures/201106_extant_species_ints.pdf', mytips, mynewdict, 'circles')
 
+    if '6A' in figstomake:
+        write_odds_of_regain(mytree, mytrimmedscores,mymatched_dic,mynewdict)
     #
     # Figure 2A ....... currently
     # All paralogs plotted in spagettigram fashion
     #
     if '2A' in figstomake:
-        all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, myscores, '../figures/201006_all_paralogs_spaghetti.pdf', [], [], 'spaget')
+        all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, myscores,
+                                 '../figures/201208_all_paralogs_spaghetti.pdf', [], [], 'spaget')
+
+    #neutral_evo(mytree, mynewdict, mytips, myduplication_nodes, mypars, 20)
+    if '2A.2' in figstomake:
+        ancskeys = {}
+        for score in myscores:
+            if myscores[score]['ancestor'] in ancskeys:
+                try:
+                    ancskeys[myscores[score]['ancestor']]['int_score'].append(myscores[score]['int_score'])
+                except KeyError:
+                    ancskeys[myscores[score]['ancestor']]['int_score'].append(-1)
+            else:
+                ancskeys[myscores[score]['ancestor']] = {}
+                try:
+                    ancskeys[myscores[score]['ancestor']]['int_score'] = [myscores[score]['int_score']]
+                except:
+                    ancskeys[myscores[score]['ancestor']]['int_score'] = [-1]
+        all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, ancskeys,  '../figures/201208_paralogs_ints_pie.pdf', [], [], 'piechart')
+
+        #
+        # Figure 2B ...... currently
+        # rectangle paths showing the 8 traces that specificity evolved over between paralogs
+        #
+    if '2B' in figstomake:
+        all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, mytrimmedscores,
+                                 '../figures/201208_traced_specificity_gains.pdf', [], [], 'rects')
+        #
+        #   Figure 2E
+        #
+        for key in mytrimmedscores.keys():
+            protein1, protein2 = list(key)
+            mytrimmedscores[key]['proteinpair'] = (protein1, protein2)
+            numpars = 0
+            pars = []
+            trace = Phylo.BaseTree.TreeMixin.trace(mytree, protein1, protein2)
+            trace.insert(0, protein1)
+            for pair in list(itertools.combinations(trace, 2)):
+                if frozenset({pair[0], pair[1]}) in mypars.keys():
+                    try:
+                        interact = mynewdict[frozenset([pair[0], pair[1]])]
+                        numpars += 1
+                        pars.append((frozenset({pair}), interact))
+                        mytrimmedscores[key]['numpars'] = numpars
+                        mytrimmedscores[key]['parnames'] = pars
+                    except KeyError:
+                        numpars += 1
+                        pars.append((frozenset({pair[0], pair[1]}), -1))
+                        mytrimmedscores[key]['numpars'] = numpars
+                        mytrimmedscores[key]['parnames'] = pars
+            # add computation to figure out which side changes occured on
+            interact1, interact2 = -1, -1
+            try:
+                interact1 = mynewdict[mytrimmedscores[key]['ancestor'].union(
+                    frozenset({protein1}))]  # it's dumb but the ancestor is already a frozenset
+            except KeyError:
+                pass
+            try:
+                interact2 = mynewdict[mytrimmedscores[key]['ancestor'].union(frozenset({protein2}))]
+            except KeyError:
+                pass
+            mytrimmedscores[key]['anc_to_diverge'] = (interact1, interact2)
+        write_csv(mytrimmedscores, ('ancestor', 'distance', 'numpars'), '../data_for_R/200722_num_paralogs_till_spec.csv', mytree)
+        write_csv(mytrimmedscores, ('distance', 'anc_to_diverge'), '../data_for_R/200722_anc_to_diverge_ints.csv', mytree)
+
+    if '4B' in figstomake:
+        alltreebits = mynodes + mytips
+        distcors = {}
+        distcorcp = {}
+        for k1 in alltreebits:
+            for k2 in alltreebits:
+                try:
+                    distcors[(k1, k2)] = mynewdict[frozenset([k1, k2])]
+                except KeyError:
+                    distcors[(k1, k2)] = -1
+        keys = np.array(list(distcors.keys()))
+        vals = np.array(list(distcors.values()))
+        unq_keys, key_idx = np.unique(keys, return_inverse = True)
+        key_idx = key_idx.reshape(-1, 2)
+        n = len(unq_keys)
+        adj = np.zeros((n, n), dtype=vals.dtype)
+        adj[key_idx[:,0], key_idx[:,1]] = vals
+        adj += adj.T
+        kmean_kwargs = {'init': 'random', 'n_init': 10, 'max_iter': 300}
+        sse = []
+        silhouettes = []
+        for k in range(2, 15):
+            kmeans = KMeans(n_clusters=k, **kmean_kwargs)
+            kmeans.fit(adj)
+            sse.append(kmeans.inertia_)
+            silhouettes.append(silhouette_score(adj, kmeans.labels_))
+            distcorcp = {}
+            for k1 in alltreebits:
+                distcorcp[frozenset([k1])] = {}
+                distcorcp[frozenset([k1])]['int_score'] = kmeans.labels_[unq_keys.tolist().index(k1)]
+            all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, distcorcp, '../figures/201125_kmeansclustering_with_' + str(k) + '_clusters.pdf', [], [], 'scatter')
+        plt.style.use('fivethirtyeight')
+        plt.plot(range(2,15), sse)
+        plt.xticks(range(2, 15))
+        plt.xlabel('Number of clusters')
+        plt.ylabel('SSE')
+        plt.show()
+        figure = plt.gcf()
+        figure.savefig(fname='../figures/201125_elbowgraph.pdf')
+        plt.style.use('fivethirtyeight')
+        plt.plot(range(2,15), silhouettes)
+        plt.xticks(range(2, 15))
+        plt.xlabel('Number of clusters')
+        plt.ylabel('Silhouette Score')
+        plt.show()
+        figure = plt.gcf()
+        figure.savefig(fname='../figures/201125_silhouettescore.pdf')
+        print('and now we think about the world we wrought')
+
+
+    if '4A' in figstomake:
+        alltreebits = mynodes + mytips
+        distcors = {}
+        for n in mynodes:
+            distcors[frozenset([n])] = {}
+            try:
+                distcors[frozenset([n])]['parent'] = mynewdict[frozenset([n])]
+            except KeyError:
+                distcors[frozenset([n])]['parent'] = -1
+            try:
+                distcors[frozenset([n])]['child1'] = mynewdict[frozenset([n, n.clades[0]])]
+            except KeyError:
+                distcors[frozenset([n])]['child1'] = -1
+            try:
+                distcors[frozenset([n])]['child2'] = mynewdict[frozenset([n, n.clades[1]])]
+            except KeyError:
+                distcors[frozenset([n])]['child2'] = -1
+        write_csv(distcors, ('parent', 'child1', 'child2'), '../data_for_R/201118_children_toparent_ints.csv', mytree)
+
+
+    if '0A' in figstomake:
+        all_paralog_plot_wrapper(myspecies_tree, species_nodes, species_tips, myspeccoors, mymatched_dic, '../figures/201106_extant_species_ints.pdf', mytips, mynewdict, 'circles')
+
+    if '0B' in figstomake:
+        alltreebits = mynodes + mytips
+        distcors = {}
+        for k1 in alltreebits:
+            for k2 in alltreebits:
+                parenttrace = Phylo.BaseTree.TreeMixin.trace(mytree, k1, k2)
+                if len(parenttrace) == 1:
+                    if k2 in k1 and k1 != k2:
+                        distcors[frozenset([k2])] = {}
+                        try:
+                            distcors[frozenset([k2])]['int_score'] = mynewdict[frozenset([k1, k2])]
+                        except KeyError:
+                            distcors[frozenset([k2])]['int_score'] = -1
+                    elif k1 in k2 and k1 != k2:
+                        distcors[frozenset([k1])] = {}
+                        try:
+                            distcors[frozenset([k1])]['int_score'] = mynewdict[frozenset([k1, k2])]
+                        except KeyError:
+                            distcors[frozenset([k1])]['int_score'] = -1
+        all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, distcors, '../figures/201117_Parentchildinteractions.pdf', [], [], 'scatter')
+
+    if '0D' in figstomake:
+        alltreebits = mytips + mynodes
+        distcors = {}
+        for k1 in alltreebits:
+            for k2 in alltreebits:
+                distcors[frozenset([k1, k2])] = {}
+                try:
+                    distcors[frozenset([k1, k2])]['int_score'] = mynewdict[frozenset([k1, k2])]
+                except KeyError:
+                    distcors[frozenset([k1, k2])]['int_score'] = -1
+        steps = calculate_num_ints_switched(distcors, mytree, mynodes, mytips, 'expand')
+        all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, steps, '../figures/201208_number_of_steps_back_to_root_weakloss.pdf', [], [], 'scatter')
+        write_csv(steps, ('int_score','curparent'), '../data_for_R/201208number_of_steps_to_root.csv', mytree)
+
+    if '0C' in figstomake:
+        alltreebits = mynodes + mytips
+        tree173 = {}
+        for clade in alltreebits:
+            if clade_object_to_readable(clade, mytree) == '283':
+                clade173 = clade
+        for k1 in alltreebits:
+            tree173[frozenset([k1])] = {}
+            try:
+                tree173[frozenset([k1])]['int_score'] = mynewdict[frozenset([clade173, k1])]
+            except KeyError:
+                tree173[frozenset([k1])]['int_score'] = -1
+        all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, tree173, '../figures/201118_clade283interactions.pdf', [], [], 'scatter')
+
+
 
     #
     # Figure 2B ...... currently
@@ -906,6 +1491,14 @@ if __name__ == "__main__":
 
 
         write_csv(distcors, ('raw', 'distance', 'pearson', 'para', 'pearsonlog','spearman','score','parentscore', 'paraparents', 'ancestor','isparentchild'), '../data_for_R/200930_interactionprofiles_cors.csv', mytree)
+
+
+    if '1B' in figstomake:
+        dupe_dic = {frozenset([i]):{} for i in myduplication_nodes}
+        for i in dupe_dic:
+            dupe_dic[i]['int_score'] = 1
+        all_paralog_plot_wrapper(mytree, mynodes, mytips, mycoors, dupe_dic, '../figures/201207_duplications_on_new_tree.pdf',[],[],'scatter')
+
 
     badbranches = {}
     for i in distcors:
