@@ -567,7 +567,7 @@ def all_paralog_plot_wrapper(tree, nodes, tips, coors, intscores, filename, desc
     return
 
 
-def basal_paralog_int_loss(intscores, tree, score_for_loss=(0,)):
+def basal_paralog_int_loss_first_only(intscores, tree, score_for_loss=(0,)):
     """Takes the intscores list and finds the two paralogs that are most closely related to the ancestor node for each ancestral node and trims the intscores list to just those
     Takes:
         intscores: a dumb list of lists situation. [[frozenset([clade_object1, clade_object2]), ancestral_clade], interaction_score, distance]
@@ -596,6 +596,45 @@ def basal_paralog_int_loss(intscores, tree, score_for_loss=(0,)):
     print("Found ", len(trimmedscores), " paralog pairs that gain specificity")
     return trimmedscores
 
+def basal_paralog_int_loss(intscores, tree, score_for_loss=(0,)):
+    """Takes the intscores list and finds the two paralogs that are most closely related to the ancestor node for each ancestral node and trims the intscores list to just those
+    Takes:
+        intscores: a dumb list of lists situation. [[frozenset([clade_object1, clade_object2]), ancestral_clade], interaction_score, distance]
+        tree: the tree object that this occurred on
+    Returns:
+        trimmedscores: a dumb list of lists situation. [[frozenset([clade_object1, clade_object2]), ancestral_clade], interaction_score, distance]
+    """
+    trimmedscores = {}
+    ancestor_dic = {}
+    for i in intscores:
+        if 'int_score' in intscores[i]:
+            if intscores[i]['int_score'] in score_for_loss:
+                if intscores[i]['ancestor'] not in ancestor_dic:
+                    ancestor_dic[intscores[i]['ancestor']] = [i]
+                else:
+                    ancestor_dic[intscores[i]['ancestor']].append(i)
+    for i in ancestor_dic:
+        mindist = {'start_val': 100}
+        minpoints = []
+        confirmedmins = []
+        for j in ancestor_dic[i]:
+            if Phylo.BaseTree.TreeMixin.distance(tree, list(j)[0], list(j)[1]) < min(mindist.values()):
+                minpoints.append(j)
+                mindist[j] = Phylo.BaseTree.TreeMixin.distance(tree, list(j)[0], list(j)[1])
+                confirmedmins.append(j)
+            for pair in [(l, j) for l in minpoints]:
+                anc1 = Phylo.BaseTree.TreeMixin.common_ancestor(tree, list(pair[0])[0], list(pair[1])[0])
+                anc2 = Phylo.BaseTree.TreeMixin.common_ancestor(tree, list(pair[0])[0], list(pair[1])[1])
+                anc3 = Phylo.BaseTree.TreeMixin.common_ancestor(tree, list(pair[0])[1], list(pair[1])[0])
+                anc4 = Phylo.BaseTree.TreeMixin.common_ancestor(tree, list(pair[0])[1], list(pair[1])[1])
+                for k in [anc1, anc2, anc3, anc4]:
+                    if frozenset([k]) != i and k != list(j)[0]  and k != list(j)[1]:
+                        confirmedmins.append[j]
+        for minscore in confirmedmins:
+            trimmedscores[minscore] = intscores[minscore]
+            trimmedscores[minscore]['mindist'] = mindist
+    print("Found ", len(trimmedscores), " paralog pairs that gain specificity")
+    return trimmedscores
 
 def write_odds_of_regain(tree, trim_score, matched_dic, data_dict):
     score_dic = {1.0: "Y", 0.5: "W", 0.0: "N"}
